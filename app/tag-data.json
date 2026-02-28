@@ -1,16 +1,18 @@
 {
+  "ai": 4,
+  "vibe": 2,
+  "git": 1,
+  "copilot": 1,
   "iree": 3,
   "ai-infra": 7,
-  "llm": 1,
-  "frontend": 1,
-  "ai": 3,
   "mlir": 1,
-  "vibe": 2,
   "risc-v": 1,
   "ai-compiler": 3,
-  "tvm": 1,
-  "c": 1,
   "next-js": 2,
   "math": 2,
-  "fuck-tag": 2
+  "fuck-tag": 2,
+  "c": 1,
+  "llm": 1,
+  "tvm": 1,
+  "frontend": 1
 }
