@@ -1,0 +1,50 @@
+---
+title: RISC-V 学习目标
+date: '2025-12-16'
+tags:
+    - 'RISC-V'
+draft: false
+summary: 'RISC-V 学习目标'
+---
+
+### 阶段 1（2–3 周）
+
+- RISC-V ISA 基础
+- ABI / Calling Convention
+- RVWMO 内存模型
+
+### 阶段 2（3–4 周）
+
+- RVV 语义（VLA 是重点）
+- LLVM RISC-V backend 结构
+- MLIR → LLVM lowering
+
+### 阶段 3（长期）
+
+- 自定义扩展
+- 性能调优
+- 编译器 + 硬件协同设计
+
+
+
+
+
+避免接触
+
+❌ 写大量裸汇编
+ ❌ 手动实现操作系统
+ ❌ 深入调试 RTL（除非你要做架构 co-design）
+
+
+
+
+
+
+
+| 你已经会的      | 对应 RISC-V 能力                  |
+| --------------- | --------------------------------- |
+| MLIR / Dialect  | 自定义 RISC-V 扩展建模            |
+| Bufferization   | Load/Store + alias 语义           |
+| SRAM 分配       | Cache / scratchpad / vector reg   |
+| Timeline 可视化 | Schedule / issue / memory overlap |
+| NPU compiler    | RISC-V + accelerator 协同         |

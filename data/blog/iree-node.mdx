@@ -1,0 +1,381 @@
+---
+title: How to build IREE
+date: '2025-11-15'
+tags:
+    - IREE
+    - "AI infra"
+draft: false
+summary: 'Iree Env doc'
+---
+
+
+# how to build
+
+- vscode `settings.json`
+
+```json
+{
+    "cmake.configureArgs": [
+        "-DCMAKE_BUILD_TYPE=Debug",
+        "-DIREE_ENABLE_ASSERTIONS=ON",
+        "-DIREE_ENABLE_SPLIT_DWARF=ON",
+        "-DIREE_ENABLE_THIN_ARCHIVES=ON",
+        "-DCMAKE_C_COMPILER=clang",
+        "-DCMAKE_CXX_COMPILER=clang++",
+        "-DIREE_ENABLE_LLD=ON",
+        "-DCMAKE_C_COMPILER_LAUNCHER=ccache",
+        "-DCMAKE_CXX_COMPILER_LAUNCHER=ccache",
+        "-DIREE_TARGET_BACKEND_DEFAULTS=OFF",
+        "-DIREE_TARGET_BACKEND_LLVM_CPU=ON",
+        "-DIREE_HAL_DRIVER_DEFAULTS=OFF",
+        "-DIREE_HAL_DRIVER_LOCAL_SYNC=ON",
+        "-DIREE_HAL_DRIVER_LOCAL_TASK=ON",
+        "-DIREE_BUILD_PYTHON_BINDINGS=ON",
+        "-DPython3_EXECUTABLE=/home/cds/anaconda3/bin/python3",
+        "-DCMAKE_INSTALL_PREFIX=/home/cds/workspace/iree/install_debug",
+    ],
+    "cmake.installPrefix": "/home/cds/workspace/iree/install_debug",
+    "cmake.buildBeforeRun": false,
+    "cmake.debugConfig": {
+        // iree compile
+        "program": "/home/cds/workspace/iree/build_debug/bin/iree-compile",
+        "args": [
+            "/home/cds/workspace/iree/cds_test/mobilenetv2-12-batch1.mlir",
+            "--iree-hal-target-device=local",
+            "--iree-hal-local-target-device-backends=llvm-cpu",
+            "--iree-llvmcpu-target-cpu=host",
+            "-o",
+            "/home/cds/workspace/iree/cds_test/mobilenetv2-12-batch1.vmfb",
+        ],
+        // iree run module
+        // "program": "/home/cds/workspace/iree/build_debug/bin/iree-run-module",
+        // "args": [
+        //     "--module=/home/cds/workspace/iree/cds_test/mobilenetv2-12-batch1.vmfb",
+        //     "--device=local-task",
+        //     "--function=torch-jit-export",
+        //     "--input=\"1x3x224x224xf32=2\"",
+        // ]
+    }
+}
+
+```
+
+## Pass
+
+dump pass one by one
+Pass Name: AutoInputConversionPipelinePass  arguementsiree-auto-input-conversion des: Analyzes and runs appropriate input pipeline.
+Pass Name: IREEImportPublicPass  arguementsiree-import-public des: Imports IREE public dialect to internal implementation.
+Pass Name: ImportMLProgramPass  arguementsiree-import-ml-program des: Imports MLProgram dialect to IREE Equivalents.
+Pass Name: SanitizeModuleNamesPass  arguementsiree-sanitize-module-names des: Sanitizes module names for uniformity across target implementations.
+Pass Name: ConvertShardToFlowPass  arguementsiree-convert-shard-to-flow des: Convert Shard dialect operations to flow.
+Pass Name: DemoteF64ToF32Pass  arguementsiree-input-conversion-demote-f64-to-f32 des: Demotes f64 types to f32 types.
+Pass Name: ConvertStreamableOpsPass  arguementsiree-abi-convert-streamable-ops des: Converts streamable ops in input dialects into their IREE dialect forms.
+Pass Name: WrapEntryPointsPass  arguementsiree-abi-wrap-entry-points des: Wraps all entry points in functions compatible with the native IREE ABI.
+Pass Name: Inliner  arguementsinline des: Inline function calls
+Pass Name: mlir::detail::OpToOpPassAdaptor  arguements des:
+Pass Name: mlir::detail::OpToOpPassAdaptor  arguements des:
+Pass Name: mlir::detail::OpToOpPassAdaptor  arguements des:
+Pass Name: mlir::detail::OpToOpPassAdaptor  arguements des:
+Pass Name: SymbolDCE  arguementssymbol-dce des: Eliminate dead symbols
+Pass Name: AssignTargetDevicesPass  arguementsiree-hal-assign-target-devices des: Assigns the HAL devices the module will target to the given list of target specifications.
+Pass Name: MaterializeTargetDevicesPass  arguementsiree-hal-materialize-target-devices des: Materializes global device handles based on a `hal.device.targets` spec.
+Pass Name: ResolveDevicePromisesPass  arguementsiree-hal-resolve-device-promises des: Resolves `#hal.device.promise` attributes to their devices.
+Pass Name: ResolveDeviceAliasesPass  arguementsiree-hal-resolve-device-aliases des: Resolves `#hal.device.alias` attributes to their expanded configurations.
+Pass Name: VerifyDevicesPass  arguementsiree-hal-verify-devices des: Verifies that all devices can be targeted with the available compiler plugins.
+Pass Name: mlir::detail::OpToOpPassAdaptor  arguements des:
+Pass Name: mlir::detail::OpToOpPassAdaptor  arguements des:
+Pass Name: mlir::detail::OpToOpPassAdaptor  arguements des:
+Pass Name: mlir::detail::OpToOpPassAdaptor  arguements des:
+Pass Name: mlir::detail::OpToOpPassAdaptor  arguements des:
+Pass Name: mlir::detail::OpToOpPassAdaptor  arguements des:
+Pass Name: EraseUnusedLinalgOperandsPass  arguementsiree-global-opt-erase-unused-linalg-operands des: Erases unused linalg operand and remove dead code.
+Pass Name: ExpandTensorShapesPass  arguementsiree-global-opt-expand-tensor-shapes des: Expands tensor shape dimensions into SSA values across the program.
+Pass Name: mlir::detail::OpToOpPassAdaptor  arguements des:
+Pass Name: mlir::detail::OpToOpPassAdaptor  arguements des:
+Pass Name: mlir::detail::OpToOpPassAdaptor  arguements des:
+Pass Name: mlir::detail::OpToOpPassAdaptor  arguements des:
+Pass Name: FoldUnitExtentDimsPass  arguementsiree-dispatch-creation-fold-unit-extent-dims des: Fold unit extent dimension of operations.
+Pass Name: mlir::detail::OpToOpPassAdaptor  arguements des:
+Pass Name: mlir::detail::OpToOpPassAdaptor  arguements des:
+Pass Name: ConvertStridedContractionToContractionPass  arguementsiree-global-opt-convert-strided-contraction-to-contraction des: Factors out an extract_slice from contraction-like ops with strided inputs.
+Pass Name: mlir::detail::OpToOpPassAdaptor  arguements des:
+Pass Name: mlir::detail::OpToOpPassAdaptor  arguements des:
+Pass Name: mlir::detail::OpToOpPassAdaptor  arguements des:
+Pass Name: mlir::detail::OpToOpPassAdaptor  arguements des:
+Pass Name: FoldGlobalsPass  arguementsiree-util-fold-globals des: Folds duplicate globals and propagates constants.
+Pass Name: IPOPass  arguementsiree-util-ipo des: Performs basic inter-procedural optimization.
+Pass Name: mlir::detail::OpToOpPassAdaptor  arguements des:
+Pass Name: mlir::detail::OpToOpPassAdaptor  arguements des:
+Pass Name: HoistIntoGlobalsPass  arguementsiree-util-hoist-into-globals des: Greedily hoists eligible constant expressions into globals.
+Pass Name: JitGlobalsPass  arguementsiree-consteval-jit-globals des: Jits global initializers and evaluates them into concrete values
+Pass Name: mlir::detail::OpToOpPassAdaptor  arguements des:
+Pass Name: mlir::detail::OpToOpPassAdaptor  arguements des:
+Pass Name: mlir::detail::OpToOpPassAdaptor  arguements des:
+Pass Name: mlir::detail::OpToOpPassAdaptor  arguements des:
+Pass Name: mlir::detail::OpToOpPassAdaptor  arguements des:
+Pass Name: TensorPadToTensorInsertSlicePass  arguementsiree-dispatch-creation-tensor-pad-to-tensor-insert-slice des: Convert tensor.pad into linalg.fill + tensor.insert_slice.
+Pass Name: FixedPointIteratorPass  arguementsiree-util-fixed-point-iterator des: Iterates a sub-pipeline to a fixed point.
+Pass Name: mlir::detail::OpToOpPassAdaptor  arguements des:
+Pass Name: mlir::detail::OpToOpPassAdaptor  arguements des:
+Pass Name: mlir::detail::OpToOpPassAdaptor  arguements des:
+Pass Name: mlir::detail::OpToOpPassAdaptor  arguements des:
+Pass Name: mlir::detail::OpToOpPassAdaptor  arguements des:
+Pass Name: mlir::detail::OpToOpPassAdaptor  arguements des:
+Pass Name: mlir::detail::OpToOpPassAdaptor  arguements des:
+Pass Name: mlir::detail::OpToOpPassAdaptor  arguements des:
+Pass Name: mlir::detail::OpToOpPassAdaptor  arguements des:
+Pass Name: HoistIntoGlobalsPass  arguementsiree-util-hoist-into-globals des: Greedily hoists eligible constant expressions into globals.
+Pass Name: mlir::detail::OpToOpPassAdaptor  arguements des:
+Pass Name: mlir::detail::OpToOpPassAdaptor  arguements des:
+Pass Name: mlir::detail::OpToOpPassAdaptor  arguements des:
+Pass Name: mlir::detail::OpToOpPassAdaptor  arguements des:
+Pass Name: mlir::detail::OpToOpPassAdaptor  arguements des:
+Pass Name: mlir::detail::OpToOpPassAdaptor  arguements des:
+Pass Name: mlir::detail::OpToOpPassAdaptor  arguements des:
+Pass Name: mlir::detail::OpToOpPassAdaptor  arguements des:
+Pass Name: mlir::detail::OpToOpPassAdaptor  arguements des:
+Pass Name: HoistIntoGlobalsPass  arguementsiree-util-hoist-into-globals des: Greedily hoists eligible constant expressions into globals.
+Pass Name: mlir::detail::OpToOpPassAdaptor  arguements des:
+Pass Name: mlir::detail::OpToOpPassAdaptor  arguements des:
+Pass Name: mlir::detail::OpToOpPassAdaptor  arguements des:
+Pass Name: mlir::detail::OpToOpPassAdaptor  arguements des:
+Pass Name: mlir::detail::OpToOpPassAdaptor  arguements des:
+Pass Name: mlir::detail::OpToOpPassAdaptor  arguements des:
+Pass Name: VerifyInputLegalityPass  arguementsiree-verify-input-legality des: Checks the legality of the IR at the start of IREE flow transformation pipeline.
+Pass Name: VerifyInitializationOrderPass  arguementsiree-util-verify-initialization-order des: Verifies module initialization order constraints.
+Pass Name: AttributeCallGraphPass  arguementsiree-util-attribute-call-graph des: Propagates attributes from callees to call sites.
+Pass Name: mlir::detail::OpToOpPassAdaptor  arguements des:
+Pass Name: mlir::detail::OpToOpPassAdaptor  arguements des:
+Pass Name: mlir::detail::OpToOpPassAdaptor  arguements des:
+Pass Name: OutlineDispatchExternsPass  arguementsiree-flow-outline-dispatch-externs des: Outlines external dispatches into executables.
+Pass Name: OutlineDispatchRegionsPass  arguementsiree-flow-outline-dispatch-regions des: Outlines dispatch regions into executables.
+Pass Name: AnnotateDispatchesPass  arguementsiree-flow-annotate-dispatches des: Annotates executable dispatches based on their contents.
+Pass Name: mlir::detail::OpToOpPassAdaptor  arguements des:
+Pass Name: mlir::detail::OpToOpPassAdaptor  arguements des:
+Pass Name: mlir::detail::OpToOpPassAdaptor  arguements des:
+Pass Name: mlir::detail::OpToOpPassAdaptor  arguements des:
+Pass Name: DeduplicateExecutablesPass  arguementsiree-flow-deduplicate-executables des: Deduplicates executables that are identical.
+Pass Name: mlir::detail::OpToOpPassAdaptor  arguements des:
+Pass Name: mlir::detail::OpToOpPassAdaptor  arguements des:
+Pass Name: mlir::detail::OpToOpPassAdaptor  arguements des:
+Pass Name: FixedPointIteratorPass  arguementsiree-util-fixed-point-iterator des: Iterates a sub-pipeline to a fixed point.
+Pass Name: mlir::detail::OpToOpPassAdaptor  arguements des:
+Pass Name: SymbolDCE  arguementssymbol-dce des: Eliminate dead symbols
+Pass Name: VerifyInitializationOrderPass  arguementsiree-util-verify-initialization-order des: Verifies module initialization order constraints.
+Pass Name: VerifyInputPass  arguementsiree-stream-verify-input des: Verifies that input dialects are supported by the streams dialect.
+Pass Name: mlir::detail::OpToOpPassAdaptor  arguements des:
+Pass Name: mlir::detail::OpToOpPassAdaptor  arguements des:
+Pass Name: mlir::detail::OpToOpPassAdaptor  arguements des:
+Pass Name: FoldGlobalsPass  arguementsiree-util-fold-globals des: Folds duplicate globals and propagates constants.
+Pass Name: FuseGlobalsPass  arguementsiree-util-fuse-globals des: Fuses correlated globals together.
+Pass Name: IPOPass  arguementsiree-util-ipo des: Performs basic inter-procedural optimization.
+Pass Name: CloneToConsumersPass  arguementsiree-stream-clone-to-consumers des: Clones operations that opt-in to consumer affinities.
+Pass Name: ConvertToStreamPass  arguementsiree-stream-conversion des: Converts from flow and other input dialects into the stream dialect.
+Pass Name: VerifyLoweringToTensorsPass  arguementsiree-stream-verify-lowering-to-tensors des: Verifies that input dialects are converted to stream.tensor.*ops.
+Pass Name: Inliner  arguementsinline des: Inline function calls
+Pass Name: mlir::detail::OpToOpPassAdaptor  arguements des:
+Pass Name: mlir::detail::OpToOpPassAdaptor  arguements des:
+Pass Name: mlir::detail::OpToOpPassAdaptor  arguements des:
+Pass Name: FoldGlobalsPass  arguementsiree-util-fold-globals des: Folds duplicate globals and propagates constants.
+Pass Name: FuseGlobalsPass  arguementsiree-util-fuse-globals des: Fuses correlated globals together.
+Pass Name: IPOPass  arguementsiree-util-ipo des: Performs basic inter-procedural optimization.
+Pass Name: CombineInitializersPass  arguementsiree-util-combine-initializers des: Combines global initializers into one.
+Pass Name: FixedPointIteratorPass  arguementsiree-util-fixed-point-iterator des: Iterates a sub-pipeline to a fixed point.
+Pass Name: SpecializeEncodingsPass  arguementsiree-stream-specialize-encodings des: Specializes serializable encodings based on layout analysis.
+Pass Name: mlir::detail::OpToOpPassAdaptor  arguements des:
+Pass Name: mlir::detail::OpToOpPassAdaptor  arguements des:
+Pass Name: mlir::detail::OpToOpPassAdaptor  arguements des:
+Pass Name: mlir::detail::OpToOpPassAdaptor  arguements des:
+Pass Name: MaterializeEncodingsPass  arguementsiree-stream-materialize-encodings des: Materialize stream.tensor.encode ops to dispatches and executables.
+Pass Name: mlir::detail::OpToOpPassAdaptor  arguements des:
+Pass Name: mlir::detail::OpToOpPassAdaptor  arguements des:
+Pass Name: mlir::detail::OpToOpPassAdaptor  arguements des:
+Pass Name: FoldGlobalsPass  arguementsiree-util-fold-globals des: Folds duplicate globals and propagates constants.
+Pass Name: FuseGlobalsPass  arguementsiree-util-fuse-globals des: Fuses correlated globals together.
+Pass Name: IPOPass  arguementsiree-util-ipo des: Performs basic inter-procedural optimization.
+Pass Name: VerifyLoweringToAsyncResourcesPass  arguementsiree-stream-verify-lowering-to-async-resources des: Verifies that all stream.tensor.* ops and types are fully lowered to stream.async.*resource ops.
+Pass Name: mlir::detail::OpToOpPassAdaptor  arguements des:
+Pass Name: mlir::detail::OpToOpPassAdaptor  arguements des:
+Pass Name: mlir::detail::OpToOpPassAdaptor  arguements des:
+Pass Name: ElideAsyncCopiesPass  arguementsiree-stream-elide-async-copies des: Elides copies when they are not performing meaningful work.
+Pass Name: mlir::detail::OpToOpPassAdaptor  arguements des:
+Pass Name: mlir::detail::OpToOpPassAdaptor  arguements des:
+Pass Name: mlir::detail::OpToOpPassAdaptor  arguements des:
+Pass Name: RefineUsagePass  arguementsiree-stream-refine-usage des: Refines resource usage bits and inserts transfers where appropriate.
+Pass Name: mlir::detail::OpToOpPassAdaptor  arguements des:
+Pass Name: mlir::detail::OpToOpPassAdaptor  arguements des:
+Pass Name: mlir::detail::OpToOpPassAdaptor  arguements des:
+Pass Name: ElideAsyncCopiesPass  arguementsiree-stream-elide-async-copies des: Elides copies when they are not performing meaningful work.
+Pass Name: mlir::detail::OpToOpPassAdaptor  arguements des:
+Pass Name: mlir::detail::OpToOpPassAdaptor  arguements des:
+Pass Name: mlir::detail::OpToOpPassAdaptor  arguements des:
+Pass Name: FoldGlobalsPass  arguementsiree-util-fold-globals des: Folds duplicate globals and propagates constants.
+Pass Name: FuseGlobalsPass  arguementsiree-util-fuse-globals des: Fuses correlated globals together.
+Pass Name: IPOPass  arguementsiree-util-ipo des: Performs basic inter-procedural optimization.
+Pass Name: VerifyAsyncAccessRangesPass  arguementsiree-stream-verify-async-access-ranges des: Verifies that stream.async.* access ranges are in bounds where possible.
+Pass Name: mlir::detail::OpToOpPassAdaptor  arguements des:
+Pass Name: mlir::detail::OpToOpPassAdaptor  arguements des:
+Pass Name: mlir::detail::OpToOpPassAdaptor  arguements des:
+Pass Name: SyncInitializersPass  arguementsiree-stream-sync-initializers des: Makes all initializer-produced timepoints synchronously wait before proceeding.
+Pass Name: PropagateTimepointsPass  arguementsiree-stream-propagate-timepoints des: Materializes timepoints and sinks them to consumers throughout the whole program.
+Pass Name: MaterializeBuiltinsPass  arguementsiree-stream-materialize-builtins des: Materialize dispatches to builtin executables where required.
+Pass Name: mlir::detail::OpToOpPassAdaptor  arguements des:
+Pass Name: mlir::detail::OpToOpPassAdaptor  arguements des:
+Pass Name: mlir::detail::OpToOpPassAdaptor  arguements des:
+Pass Name: FoldGlobalsPass  arguementsiree-util-fold-globals des: Folds duplicate globals and propagates constants.
+Pass Name: FuseGlobalsPass  arguementsiree-util-fuse-globals des: Fuses correlated globals together.
+Pass Name: IPOPass  arguementsiree-util-ipo des: Performs basic inter-procedural optimization.
+Pass Name: VerifyLoweringToAsyncPass  arguementsiree-stream-verify-lowering-to-async des: Verifies that all stream.tensor.*ops and types are fully lowered to stream.async.* ops and all resources have an assigned lifetime.
+Pass Name: ScheduleAllocationPass  arguementsiree-stream-schedule-allocation des: Allocates resources and converts to explicit stream commands.
+Pass Name: EmplaceTransientsPass  arguementsiree-stream-emplace-transients des: Emplaces transient allocations into user-provided storage buffers.
+Pass Name: MaterializeTransientSizeQueriesPass  arguementsiree-stream-materialize-transient-size-queries des: Generates size query functions for transient storage.
+Pass Name: mlir::detail::OpToOpPassAdaptor  arguements des:
+Pass Name: mlir::detail::OpToOpPassAdaptor  arguements des:
+Pass Name: mlir::detail::OpToOpPassAdaptor  arguements des:
+Pass Name: PropagateSubrangesPass  arguementsiree-util-propagate-subranges des: Propagates resource subranges across the program.
+Pass Name: mlir::detail::OpToOpPassAdaptor  arguements des:
+Pass Name: mlir::detail::OpToOpPassAdaptor  arguements des:
+Pass Name: mlir::detail::OpToOpPassAdaptor  arguements des:
+Pass Name: FoldGlobalsPass  arguementsiree-util-fold-globals des: Folds duplicate globals and propagates constants.
+Pass Name: FuseGlobalsPass  arguementsiree-util-fuse-globals des: Fuses correlated globals together.
+Pass Name: IPOPass  arguementsiree-util-ipo des: Performs basic inter-procedural optimization.
+Pass Name: AutomaticReferenceCountingPass  arguementsiree-stream-automatic-reference-counting des: Inserts automatic reference counting ops for resources.
+Pass Name: AnnotateConstantTransientSizePass  arguementsiree-stream-annotate-constant-transient-size des: Annotates constant transient sizes in reflection metadata.
+Pass Name: VerifyLoweringToCmdPass  arguementsiree-stream-verify-lowering-to-cmd des: Verifies that all stream.async.*ops and types are fully lowered to stream.cmd.* ops.
+Pass Name: mlir::detail::OpToOpPassAdaptor  arguements des:
+Pass Name: mlir::detail::OpToOpPassAdaptor  arguements des:
+Pass Name: mlir::detail::OpToOpPassAdaptor  arguements des:
+Pass Name: FoldGlobalsPass  arguementsiree-util-fold-globals des: Folds duplicate globals and propagates constants.
+Pass Name: FuseGlobalsPass  arguementsiree-util-fuse-globals des: Fuses correlated globals together.
+Pass Name: IPOPass  arguementsiree-util-ipo des: Performs basic inter-procedural optimization.
+Pass Name: mlir::detail::OpToOpPassAdaptor  arguements des:
+Pass Name: mlir::detail::OpToOpPassAdaptor  arguements des:
+Pass Name: mlir::detail::OpToOpPassAdaptor  arguements des:
+Pass Name: mlir::detail::OpToOpPassAdaptor  arguements des:
+Pass Name: mlir::detail::OpToOpPassAdaptor  arguements des:
+Pass Name: mlir::detail::OpToOpPassAdaptor  arguements des:
+Pass Name: FixedPointIteratorPass  arguementsiree-util-fixed-point-iterator des: Iterates a sub-pipeline to a fixed point.
+Pass Name: FuseDispatchBindingsPass  arguementsiree-stream-fuse-dispatch-bindings des: Fuses bindings to the same underlying storage to reduce binding count.
+Pass Name: AnnotateDispatchArgumentsPass  arguementsiree-stream-annotate-dispatch-arguments des: Annotates dispatch arguments with potential values derived from dispatch sites.
+Pass Name: AnnotateDispatchAssumptionsPass  arguementsiree-stream-annotate-dispatch-assumptions des: Adds util.assume.* op to executables from all dispatch sites.
+Pass Name: PackDispatchOperandsPass  arguementsiree-stream-pack-dispatch-operands des: Packs stream dispatch operands into i32 push constants.
+Pass Name: mlir::detail::OpToOpPassAdaptor  arguements des:
+Pass Name: mlir::detail::OpToOpPassAdaptor  arguements des:
+Pass Name: mlir::detail::OpToOpPassAdaptor  arguements des:
+Pass Name: FoldGlobalsPass  arguementsiree-util-fold-globals des: Folds duplicate globals and propagates constants.
+Pass Name: FuseGlobalsPass  arguementsiree-util-fuse-globals des: Fuses correlated globals together.
+Pass Name: IPOPass  arguementsiree-util-ipo des: Performs basic inter-procedural optimization.
+Pass Name: FoldUniformOperandsPass  arguementsiree-stream-fold-uniform-operands des: Folds redundant and uniformly constant dispatch operands.
+Pass Name: mlir::detail::OpToOpPassAdaptor  arguements des:
+Pass Name: mlir::detail::OpToOpPassAdaptor  arguements des:
+Pass Name: mlir::detail::OpToOpPassAdaptor  arguements des:
+Pass Name: FoldGlobalsPass  arguementsiree-util-fold-globals des: Folds duplicate globals and propagates constants.
+Pass Name: FuseGlobalsPass  arguementsiree-util-fuse-globals des: Fuses correlated globals together.
+Pass Name: IPOPass  arguementsiree-util-ipo des: Performs basic inter-procedural optimization.
+Pass Name: SymbolDCE  arguementssymbol-dce des: Eliminate dead symbols
+Pass Name: VerifyInitializationOrderPass  arguementsiree-util-verify-initialization-order des: Verifies module initialization order constraints.
+Pass Name: AttributeCallGraphPass  arguementsiree-util-attribute-call-graph des: Propagates attributes from callees to call sites.
+Pass Name: AssignTargetDevicesPass  arguementsiree-hal-assign-target-devices des: Assigns the HAL devices the module will target to the given list of target specifications.
+Pass Name: MaterializeTargetDevicesPass  arguementsiree-hal-materialize-target-devices des: Materializes global device handles based on a `hal.device.targets` spec.
+Pass Name: ResolveDevicePromisesPass  arguementsiree-hal-resolve-device-promises des: Resolves `#hal.device.promise` attributes to their devices.
+Pass Name: ResolveDeviceAliasesPass  arguementsiree-hal-resolve-device-aliases des: Resolves `#hal.device.alias` attributes to their expanded configurations.
+Pass Name: VerifyDevicesPass  arguementsiree-hal-verify-devices des: Verifies that all devices can be targeted with the available compiler plugins.
+Pass Name: mlir::detail::OpToOpPassAdaptor  arguements des:
+Pass Name: mlir::detail::OpToOpPassAdaptor  arguements des:
+Pass Name: mlir::detail::OpToOpPassAdaptor  arguements des:
+Pass Name: FoldGlobalsPass  arguementsiree-util-fold-globals des: Folds duplicate globals and propagates constants.
+Pass Name: FuseGlobalsPass  arguementsiree-util-fuse-globals des: Fuses correlated globals together.
+Pass Name: VerifyDevicesPass  arguementsiree-hal-verify-devices des: Verifies that all devices can be targeted with the available compiler plugins.
+Pass Name: MaterializeInterfacesPass  arguementsiree-hal-materialize-interfaces des: Defines hal.executable variants for stream.executable ops.
+Pass Name: PruneExecutablesPass  arguementsiree-hal-prune-executables des: Prunes executable variants and exports that are not referenced.
+Pass Name: mlir::detail::OpToOpPassAdaptor  arguements des:
+Pass Name: mlir::detail::OpToOpPassAdaptor  arguements des:
+Pass Name: ConvertToHALPass  arguementsiree-hal-conversion des: Converts from stream and other intermediate dialects into the hal dialect.
+Pass Name: OutlineMemoizeRegionsPass  arguementsiree-hal-outline-memoize-regions des: Outlines `hal.device.memoize` regions and creates global resources.
+Pass Name: mlir::detail::OpToOpPassAdaptor  arguements des:
+Pass Name: mlir::detail::OpToOpPassAdaptor  arguements des:
+Pass Name: mlir::detail::OpToOpPassAdaptor  arguements des:
+Pass Name: FoldGlobalsPass  arguementsiree-util-fold-globals des: Folds duplicate globals and propagates constants.
+Pass Name: FuseGlobalsPass  arguementsiree-util-fuse-globals des: Fuses correlated globals together.
+Pass Name: PruneExecutablesPass  arguementsiree-hal-prune-executables des: Prunes executable variants and exports that are not referenced.
+Pass Name: LinkAllExecutablesPass  arguementsiree-hal-link-all-executables des: Links hal.executable ops into one or more hal.executable ops.
+Pass Name: mlir::detail::OpToOpPassAdaptor  arguements des:
+Pass Name: ResolveExportOrdinalsPass  arguementsiree-hal-resolve-export-ordinals des: Resolves symbolic hal.executable.export references to ordinals.
+Pass Name: MaterializeResourceCachesPass  arguementsiree-hal-materialize-resource-caches des: Materializes cached globals for device resources.
+Pass Name: ResolveTopologyQueriesPass  arguementsiree-hal-resolve-topology-queries des: Try to statically resolve ops using topology information.
+Pass Name: MemoizeDeviceSelectionPass  arguementsiree-hal-memoize-device-selection des: Finds !hal.device selection ops and creates variables initialized on startup.
+Pass Name: MemoizeDeviceQueriesPass  arguementsiree-hal-memoize-device-queries des: Finds hal.device.query ops and creates variables initialized on startup.
+Pass Name: mlir::detail::OpToOpPassAdaptor  arguements des:
+Pass Name: mlir::detail::OpToOpPassAdaptor  arguements des:
+Pass Name: mlir::detail::OpToOpPassAdaptor  arguements des:
+Pass Name: FoldGlobalsPass  arguementsiree-util-fold-globals des: Folds duplicate globals and propagates constants.
+Pass Name: FuseGlobalsPass  arguementsiree-util-fuse-globals des: Fuses correlated globals together.
+Pass Name: mlir::detail::OpToOpPassAdaptor  arguements des:
+Pass Name: mlir::detail::OpToOpPassAdaptor  arguements des:
+Pass Name: mlir::detail::OpToOpPassAdaptor  arguements des:
+Pass Name: InitializeDevicesPass  arguementsiree-hal-initialize-devices des: Initializes global device handles based on their specification.
+Pass Name: AffineExpandIndexOps  arguementsaffine-expand-index-ops des: Lower affine operations operating on indices into more fundamental operations
+Pass Name: LowerAffinePass  arguementslower-affine des: Lower Affine operations to a combination of Arith and SCF operations
+Pass Name: mlir::detail::OpToOpPassAdaptor  arguements des:
+Pass Name: mlir::detail::OpToOpPassAdaptor  arguements des:
+Pass Name: mlir::detail::OpToOpPassAdaptor  arguements des:
+Pass Name: mlir::detail::OpToOpPassAdaptor  arguements des:
+Pass Name: PruneExecutablesPass  arguementsiree-hal-prune-executables des: Prunes executable variants and exports that are not referenced.
+Pass Name: SymbolDCE  arguementssymbol-dce des: Eliminate dead symbols
+Pass Name: FixedPointIteratorPass  arguementsiree-util-fixed-point-iterator des: Iterates a sub-pipeline to a fixed point.
+Pass Name: Inliner  arguementsinline des: Inline function calls
+Pass Name: SymbolDCE  arguementssymbol-dce des: Eliminate dead symbols
+Pass Name: VerifyInitializationOrderPass  arguementsiree-util-verify-initialization-order des: Verifies module initialization order constraints.
+Pass Name: CombineInitializersPass  arguementsiree-util-combine-initializers des: Combines global initializers into one.
+Pass Name: mlir::detail::OpToOpPassAdaptor  arguements des:
+Pass Name: mlir::detail::OpToOpPassAdaptor  arguements des:
+Pass Name: mlir::detail::OpToOpPassAdaptor  arguements des:
+Pass Name: mlir::detail::OpToOpPassAdaptor  arguements des:
+Pass Name: mlir::detail::OpToOpPassAdaptor  arguements des:
+Pass Name: mlir::detail::OpToOpPassAdaptor  arguements des:
+Pass Name: mlir::detail::OpToOpPassAdaptor  arguements des:
+Pass Name: ArithUnsignedWhenEquivalentPass  arguementsarith-unsigned-when-equivalent des: Replace signed ops with unsigned ones where they are proven equivalent
+Pass Name: PropagateSubrangesPass  arguementsiree-util-propagate-subranges des: Propagates resource subranges across the program.
+Pass Name: mlir::detail::OpToOpPassAdaptor  arguements des:
+Pass Name: mlir::detail::OpToOpPassAdaptor  arguements des:
+Pass Name: mlir::detail::OpToOpPassAdaptor  arguements des:
+Pass Name: mlir::detail::OpToOpPassAdaptor  arguements des:
+Pass Name: SymbolDCE  arguementssymbol-dce des: Eliminate dead symbols
+Pass Name: mlir::detail::OpToOpPassAdaptor  arguements des:
+Pass Name: mlir::detail::OpToOpPassAdaptor  arguements des:
+Pass Name: mlir::detail::OpToOpPassAdaptor  arguements des:
+Pass Name: FoldGlobalsPass  arguementsiree-util-fold-globals des: Folds duplicate globals and propagates constants.
+Pass Name: FuseGlobalsPass  arguementsiree-util-fuse-globals des: Fuses correlated globals together.
+Pass Name: ConversionPass  arguementsiree-vm-conversion des: Converts from various dialects (standard, HAL, etc) to the VM dialect.
+Pass Name: mlir::detail::OpToOpPassAdaptor  arguements des:
+Pass Name: mlir::detail::OpToOpPassAdaptor  arguements des:
+Pass Name: mlir::detail::OpToOpPassAdaptor  arguements des:
+Pass Name: mlir::detail::OpToOpPassAdaptor  arguements des:
+Pass Name: mlir::detail::OpToOpPassAdaptor  arguements des:
+Pass Name: mlir::detail::OpToOpPassAdaptor  arguements des:
+Pass Name: mlir::detail::OpToOpPassAdaptor  arguements des:
+Pass Name: SymbolDCE  arguementssymbol-dce des: Eliminate dead symbols
+Pass Name: mlir::detail::OpToOpPassAdaptor  arguements des:
+Pass Name: mlir::detail::OpToOpPassAdaptor  arguements des:
+Pass Name: mlir::detail::OpToOpPassAdaptor  arguements des:
+Pass Name: FoldGlobalsPass  arguementsiree-util-fold-globals des: Folds duplicate globals and propagates constants.
+Pass Name: FuseGlobalsPass  arguementsiree-util-fuse-globals des: Fuses correlated globals together.
+Pass Name: mlir::detail::OpToOpPassAdaptor  arguements des:
+Pass Name: Inliner  arguementsinline des: Inline function calls
+Pass Name: SymbolDCE  arguementssymbol-dce des: Eliminate dead symbols
+Pass Name: mlir::detail::OpToOpPassAdaptor  arguements des:
+Pass Name: mlir::detail::OpToOpPassAdaptor  arguements des:
+Pass Name: mlir::detail::OpToOpPassAdaptor  arguements des:
+Pass Name: mlir::detail::OpToOpPassAdaptor  arguements des:
+Pass Name: SymbolDCE  arguementssymbol-dce des: Eliminate dead symbols
+Pass Name: mlir::detail::OpToOpPassAdaptor  arguements des:
+Pass Name: mlir::detail::OpToOpPassAdaptor  arguements des:
+Pass Name: mlir::detail::OpToOpPassAdaptor  arguements des:
+Pass Name: FoldGlobalsPass  arguementsiree-util-fold-globals des: Folds duplicate globals and propagates constants.
+Pass Name: FuseGlobalsPass  arguementsiree-util-fuse-globals des: Fuses correlated globals together.
+Pass Name: mlir::detail::OpToOpPassAdaptor  arguements des:
+Pass Name: Canonicalizer  arguementscanonicalize des: Canonicalize operations
+Pass Name: CSE  arguementscse des: Eliminate common sub-expressions
+Pass Name: Canonicalizer  arguementscanonicalize des: Canonicalize operations
+Pass Name: mlir::detail::OpToOpPassAdaptor  arguements des:
+Pass Name: DropCompilerHintsPass  arguementsiree-util-drop-compiler-hints des: Deletes operations that have no runtime equivalent.

@@ -1,0 +1,177 @@
+---
+title: vibe coding
+date: '2025-12-20'
+tags: ['ai', 'vibe']
+draft: false
+summary: "斯坦福2025年-现代软件开发人员学习笔记"
+---
+
+# AI编程学习
+
+
+
+本片文档写于2025年12月20日， 最近AI编程， `vibe coding`  `agent` 等概念太热门了。社交配媒体无限放大AI焦虑，让每一个软件工程师都感觉AI要干掉我们的职业了。so ， 让我来比较系统的接触学习一下这部分信息。消除焦虑，追赶时代是我这次学习旅途的主要目标。
+
+
+
+**本次学习的参考资料：**
+
+1. [cs146s 斯坦福大学2025年秋： 现代软件开发人员](https://themodernsoftware.dev/)
+   1. 相关代码开源在GitHub [modern-software-dev-assignments](https://github.com/mihail911/modern-software-dev-assignments/tree/master)
+   2. ![image-20251220072716075](C:\Users\alanchen\AppData\Roaming\Typora\typora-user-images\image-20251220072716075.png)
+
+2. [2025 年人工智能工程师阅读清单](https://www.latent.space/p/2025-papers#%C2%A7section-frontier-llms)
+   1. ![image-20251220072841998](C:\Users\alanchen\AppData\Roaming\Typora\typora-user-images\image-20251220072841998.png)
+
+
+
+# 斯坦福公开课
+
+## 第一周： 学习如何prompt
+
+了解并掌握prompt，
+
+下图是oepnai的coodex的功能解析。
+
+
+
+![image-20251220072650855](C:\Users\alanchen\AppData\Roaming\Typora\typora-user-images\image-20251220072650855.png)
+
+## 第二周：coding agents:  MCP
+
+agent的架构和组件有哪些， 如何进行函数和工具的调用， 以及 MCP介绍。
+
+![image-20251220074559560](C:\Users\alanchen\AppData\Roaming\Typora\typora-user-images\image-20251220074559560.png)
+
+
+
+![image-20251220074613003](C:\Users\alanchen\AppData\Roaming\Typora\typora-user-images\image-20251220074613003.png)
+
+**局限性**
+
+如今，智能体（Agents）不能很好地处理很多工具
+
+应用程序接口（APIs）会很快占用你的上下文窗口
+
+应将应用程序接口（APIs）设计为人工智能原生的，而非僵化的
+
+
+
+这一节使用 `fastmcp` 创建了几个简单的MCP服务
+
+
+
+## 第三周： AI ADE
+
+上下文管理和代码理解
+
+智能体产品需求文档
+
+IDE集成与扩展
+
+
+
+AI编程工具的三个阶段：
+
+1. 代码完成， 加速编码， 类似GitHub copilot
+2. AI IDE，单个人的任务完成
+3. AI Agent： 大范围并行开发
+
+![image-20251220075745479](C:\Users\alanchen\AppData\Roaming\Typora\typora-user-images\image-20251220075745479.png)
+
+
+
+ **Cognition AI 旗下 Windsurf（集成了 Devin）的功能模块**，它们的核心作用是**帮助开发者更快理解、管理代码库，提升编程效率**，具体模块的作用如下：
+
+1. **DeepWiki**
+
+   是 AI 驱动的代码文档系统，能自动解析代码库中的函数、类等元素，生成带示例和最佳实践的深度解释（悬停 / 快捷键即可查看），同时支持将解释同步到对话上下文，解决 “代码文档缺失 / 难理解” 的问题。
+
+2. **Ask Devin**
+
+   是 Devin（AI 软件工程师）的交互入口，开发者可以通过自然语言向 Devin 提问代码相关问题、分配任务（比如修复 Bug、生成测试用例），Devin 会结合代码上下文给出精准回答或直接执行任务。
+
+3. **Codemaps**
+
+   是 AI 生成的 “代码地图” 工具，能根据开发者的问题（比如 “用户数据如何从前端传到存储”），自动生成代码库的结构 / 依赖关系图谱（支持文本 / 可视化视图），点击节点可直接跳转到对应代码行，还能和 AI 智能体联动提供上下文，解决 “大型代码库难上手” 的问题。
+
+4. **DeepWiki in Windsurf**
+
+   是 DeepWiki 功能在 Windsurf IDE 中的集成版本，让开发者在编码过程中可以直接调用 DeepWiki 的代码解释能力，无需切换工具。
+
+![image-20251220075838467](C:\Users\alanchen\AppData\Roaming\Typora\typora-user-images\image-20251220075838467.png)
+
+
+
+现在的流程是使用异步AI工具开发，   使用同步AI工具进行测试。
+
+未来如果异步代理测试属性加强，可以考虑all in 异步AI工具。
+
+![image-20251220080018429](C:\Users\alanchen\AppData\Roaming\Typora\typora-user-images\image-20251220080018429.png)
+
+
+
+未来的代码开发，更多的时间会花费在构思和测试上
+
+![image-20251220081801481](C:\Users\alanchen\AppData\Roaming\Typora\typora-user-images\image-20251220081801481.png)
+
+
+
+**未来如何发展？**
+
+人类工程师作为代理管理者。
+
+1. 利用同步工具解决最棘手的问题
+2. 利用异步工具实现 10 倍的影响力
+
+**未来重要的技能：**
+
+1.  委派与多线程处理
+2. 代码阅读
+3.  规划、确定范围、架构设计
+
+
+
+
+
+**斯坦福大学关于人工智能对开发者生产力影响的研究发现：**
+
+1. 人工智能工具生成的许多“额外代码”最终都只是在重新处理上周生成的劣质代码。
+2. 编码智能体对于新项目或小改动来说非常有用，但在大型成熟的代码库中，它们往往会降低开发者的工作效率。
+
+**管理上下文的方法：**
+
+1. 当效果不尽人意的时候，重新开启一个会话
+2. 无论你是否在正轨上，当你的上下文开始变得冗长时，你可能会想暂停工作，用一个全新的上下文窗口重新开始。要做到这一点，你或许会使用这样的提示词：
+
+> 把我们到目前为止所做的一切都写到progress.md里，确保要注明最终目标、我们采用的方法、到目前为止已完成的步骤，以及我们正在解决的当前问题”
+
+3.
+
+## 第四周： 编码智能体模式
+
+
+
+ 管理智能体的自主级别，人机协作模式。
+
+
+
+
+
+## 第五周： 现代终端
+
+
+
+## 第六周 ： AI测试和安全
+
+
+
+## 第七周：现代软件支持
+
+
+
+## 第八周： 代理部署
+
+
+
+## 第八周： 自动化UI和app构建

@@ -1,0 +1,184 @@
+---
+title: c++ memory tools
+date: '2025-1-2'
+tags: ['c++']
+draft: false
+summary: 'c++ memory tool!'
+---
+
+# c++内存分配详情
+
+# Valgrind 的 `massif`
+
+> valgrind massif提供了堆分析功能, 但存在以下问题
+>
+> 运行速度慢: 尤其是在多线层应用程序上. valgrind是序列化代码执行, 因此开销很大
+> 不容易使用: massif通常需要寻找各种合适参数以进行使用, --depth、–detailed freq和–max等等, 生成的数据也偏粗糙
+> 结束时才输出: massif要在调试对象结束时才输出数据, 而定期检查输出数据很多时候是很有用的
+
+- 安装命令：
+
+  - `apt install valgrind`
+
+  ```shell
+  (base) ➜  build valgrind --version
+  valgrind-3.18.1
+  (base) ➜  build valgrind --tool=massif ./memory_test
+  ==3624== Massif, a heap profiler
+  ==3624== Copyright (C) 2003-2017, and GNU GPL'd, by Nicholas Nethercote
+  ==3624== Using Valgrind-3.18.1 and LibVEX; rerun with -h for copyright info
+  ==3624== Command: ./memory_test
+  ==3624==
+  Successfully allocated 300M memory.
+  Successfully freed 300M memory.
+  ==3624==
+  (base) ➜  build ls
+  CMakeCache.txt  CMakeFiles  Makefile  cmake_install.cmake  compile_commands.json  massif.out.3624  memory_test
+  (base) ➜  build ms_print ./massif.out.3624
+  --------------------------------------------------------------------------------
+  Command:            ./memory_test
+  Massif arguments:   (none)
+  ms_print arguments: ./massif.out.3624
+  --------------------------------------------------------------------------------
+
+
+      MB
+  300.1^                                                                       #
+       |:::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::#
+       |:                                                                      #
+       |:                                                                      #
+       |:                                                                      #
+       |:                                                                      #
+       |:                                                                      #
+       |:                                                                      #
+       |:                                                                      #
+       |:                                                                      #
+       |:                                                                      #
+       |:                                                                      #
+       |:                                                                      #
+       |:                                                                      #
+       |:                                                                      #
+       |:                                                                      #
+       |:                                                                      #
+       |:                                                                      #
+       |:                                                                      #
+       |:                                                                      #
+     0 +----------------------------------------------------------------------->Gi
+       0                                                                   6.741
+
+  Number of snapshots: 8
+   Detailed snapshots: [4 (peak)]
+
+  --------------------------------------------------------------------------------
+    n        time(i)         total(B)   useful-heap(B) extra-heap(B)    stacks(B)
+  --------------------------------------------------------------------------------
+    0              0                0                0             0            0
+    1      2,375,724           73,736           73,728             8            0
+    2      2,378,794      314,650,576      314,646,528         4,048            0
+    3  7,237,559,570      314,651,608      314,647,552         4,056            0
+    4  7,237,568,106      314,651,608      314,647,552         4,056            0
+  100.00% (314,647,552B) (heap allocation functions) malloc/new/new[], --alloc-fns, etc.
+  ->99.97% (314,572,800B) 0x109EBE: __gnu_cxx::new_allocator<char>::allocate(unsigned long, void const*) (new_allocator.h:127)
+  | ->99.97% (314,572,800B) 0x109DEB: std::allocator_traits<std::allocator<char> >::allocate(std::allocator<char>&, unsigned long) (alloc_traits.h:464)
+  |   ->99.97% (314,572,800B) 0x109D17: std::_Vector_base<char, std::allocator<char> >::_M_allocate(unsigned long) (stl_vector.h:346)
+  |     ->99.97% (314,572,800B) 0x109B8E: std::_Vector_base<char, std::allocator<char> >::_M_create_storage(unsigned long) (stl_vector.h:361)
+  |       ->99.97% (314,572,800B) 0x1098A8: std::_Vector_base<char, std::allocator<char> >::_Vector_base(unsigned long, std::allocator<char> const&) (stl_vector.h:305)
+  |         ->99.97% (314,572,800B) 0x109640: std::vector<char, std::allocator<char> >::vector(unsigned long, std::allocator<char> const&) (stl_vector.h:511)
+  |           ->99.97% (314,572,800B) 0x109395: main (main.cpp:8)
+  |
+  ->00.02% (74,752B) in 1+ places, all below ms_print's threshold (01.00%)
+
+  --------------------------------------------------------------------------------
+    n        time(i)         total(B)   useful-heap(B) extra-heap(B)    stacks(B)
+  --------------------------------------------------------------------------------
+    5  7,237,568,106           74,768           74,752            16            0
+    6  7,237,580,097            1,032            1,024             8            0
+    7  7,237,581,202                0                0             0            0
+  (base) ➜  build
+  ```
+
+Valgrind 是一个非常强大的工具，用于调试和分析程序的内存使用情况。它可以检测多种内存问题，包括内存泄漏、越界访问和非法读写等。对于内存分配过多的问题，它的`massif`工具可以生成内存使用的详细报告。
+
+1. 在`build`目录下执行以下命令运行 Valgrind 的 Massif 工具：
+
+```bash
+valgrind --tool=massif./MyExecutable
+```
+
+程序运行结束后，会在当前目录下生成一个名为`massif.out.<PID>`的文件，其中`<PID>`是程序运行时的进程 ID12。
+
+2. 查看分析报告，可以使用`ms_print`工具来查看`massif.out.<PID>`文件中的内存分析报告，例如：
+
+```bash
+ms_print massif.out.<PID>
+```
+
+报告中会显示内存使用的峰值、不同阶段的内存分配和释放情况、各个函数对内存使用的贡献等信息12。
+
+除了基本的使用方法，还可以根据需要添加一些 Massif 的选项来获取更详细或特定的分析结果1：
+
+- `--time-unit=B`：如果程序执行时间较短，可以使用该选项，将时间单位设置为字节分配 / 释放的数量，而不是默认的指令执行数量，以便更好地观察内存使用情况。
+- `--detailed-freq=1`：增加该选项可以获取每个快照详尽的信息，详细的快照信息在图表中由 “@” 字符组成的条形图表示。默认情况下，10 个快照中只有第 10 个快照是详细的。
+
+# **Heap Profilers（堆分析器）**
+
+## heaptrack
+
+```shell
+sudo apt-get install heaptrack
+sudo apt-get install heaptrack-gui
+
+heaptrack -v	# 查看版本号
+
+
+本地堆栈分析
+heaptrack_print heaptrack.APP.PID.gz | less
+```
+
+- 概述
+  - Heaptrack 是一个用于分析堆内存使用情况的工具，主要用于 Linux 系统。它能够记录程序运行过程中每一次堆内存的分配和释放操作，并且可以生成详细的报告，帮助开发者定位内存泄漏、内存过度使用等问题。
+- 工作原理
+  - Heaptrack 通过拦截程序对堆内存分配函数（如`malloc`、`new`等）和释放函数（如`free`、`delete`等）的调用，记录下每次分配的大小、调用栈以及对应的释放信息。当程序运行结束后，它会根据这些记录生成一个报告，展示内存使用的详细情况。
+
+## **gperftools**
+
+> gperftools也有类似heaptrack的功能, 但不能提供heaptrack那么多的数据, 也没有那么高效.
+
+- 概述
+
+  - gperftools 是一个强大的性能分析工具集，其中的`pprof`工具可以用于堆内存分析。它可以生成程序运行过程中堆内存分配的详细报告，帮助你找到内存分配热点，即哪些函数或者代码路径分配了大量的内存。
+
+- 使用方法
+
+  ```cpp
+  #include <gperftools/profiler.h>
+  int main() {
+      // 开始性能分析，输出文件为my_program.prof
+      ProfilerStart("my_program.prof");
+      // 你的程序代码
+      std::vector<int> largeVector;
+      for (int i = 0; i < 1000000; ++i) {
+          largeVector.push_back(i);
+      }
+      // 结束性能分析
+      ProfilerStop();
+      return 0;
+  }
+  ```
+
+  - 运行程序后，会生成一个`my_program.prof`文件。使用`pprof`工具（命令如`pprof my_program my_program.prof`）可以查看详细的内存分析报告，包括函数的内存分配情况、调用关系等，从而帮助你定位占用大量内存的变量所在的代码区域。
+
+  -
+
+## Tcmalloc（谷歌的线程缓存分配器）
+
+- 概述
+  - Tcmalloc 是谷歌开发的一种高效的内存分配器，它本身也提供了一些内存分析的功能。它在性能上比传统的`libc`分配器更优，并且可以帮助你统计内存分配信息。
+- 使用方法
+  - 与 gperftools 类似，将 Tcmalloc 库链接到你的程序中（例如，在编译时添加`-ltcmalloc`选项）。Tcmalloc 提供了一些函数来获取内存分配的统计信息，如`MallocExtension::instance()->GetStats()`（需要包含相关头文件并在适当的命名空间下使用），这个函数可以返回内存分配的各种统计数据，包括已分配内存的大小、分配次数等。通过分析这些统计数据，结合程序的代码逻辑，你可以找出占用大量内存的变量或者代码片段。不过这种方法相对比较底层，需要对 Tcmalloc 的接口和数据结构有一定的了解。
+
+如何使用AddressSanitizer检测内存占用过多的情况？
+
+除了Valgrind和AddressSanitizer，还有哪些常见的内存分析工具？
+
+使用AddressSanitizer可能会带来哪些性能开销？
