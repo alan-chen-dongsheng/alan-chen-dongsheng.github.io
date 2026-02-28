@@ -2,8 +2,8 @@
 
 > 个人技术博客，主要记录 AI Compiler、MLIR/IREE、前端工程、软件开发等方向的学习笔记与思考。
 
-🌐 **线上地址**：[https://sexjun-github-io.vercel.app](https://sexjun-github-io.vercel.app)
-📦 **源码仓库**：[github.com/sexjun/sexjun.github.io](https://github.com/sexjun/sexjun.github.io)
+🌐 **线上地址**：[https://alanchen.vercel.app](https://alanchen.vercel.app) | [https://alan-chen-dongsheng.github.io](https://alan-chen-dongsheng.github.io)
+📦 **源码仓库**：[github.com/alan-chen-dongsheng/alan-chen-dongsheng.github.io](https://github.com/alan-chen-dongsheng/alan-chen-dongsheng.github.io)
 
 ---
 
