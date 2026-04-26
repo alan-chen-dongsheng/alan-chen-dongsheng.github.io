@@ -1,6 +1,6 @@
 ---
 title: 'Github Copilot 使用指南'
-date: '2025-01-01'
+date: '2026-04-26'
 tags:
   - copilot
   - AI
@@ -67,20 +67,21 @@ applyTo: '**/*.py'
 ---
 # Project general coding guidelines
 
+## Build Commands
+- `npm run build` - Build the project
+- `npm run test` - Run all tests
+- `npm run lint:fix` - Fix linting issues
+
 ## Code Style
-- Use semantic HTML5 elements (header, main, section, article, etc.)
-- Prefer modern JavaScript (ES6+) features like const/let, arrow functions, and template literals
+- Use TypeScript strict mode
+- Prefer functional components over class components
+- Always add JSDoc comments for public APIs
 
-## Naming Conventions
-- Use PascalCase for component names, interfaces, and type aliases
-- Use camelCase for variables, functions, and methods
-- Prefix private class members with underscore (_)
-- Use ALL_CAPS for constants
+## Workflow
+- Run `npm run lint:fix && npm test` after making changes
+- Commit messages follow conventional commits format
+- Create feature branches from `main`
 
-## Code Quality
-- Use meaningful variable and function names that clearly describe their purpose
-- Include helpful comments for complex logic
-- Add error handling for user inputs and API calls
 
 ```
 
@@ -150,48 +151,9 @@ applyTo: '**/*.py'
 
  
 
-### 2.4 最佳实践举例
 
 
-
-用 `#codebase` 明确指示 AI 搜索你的工作区相关代码。
-
-用 `#fetch` 从网页拉取内容，或 `#githubRepo` 搜索 GitHub 仓库。
-
-
-
-先规划, 再实施 [上下文管理流程](https://code.visualstudio.com/docs/copilot/guides/context-engineering-guide)
-
-1. 探索, 让代理理解代码
-2. 计划, 让代理给出计划
-3. 实施, 让代理干活
-4. review, 让代理检查回顾
-
-
-
-**保存可复用的提示词:**
-
-将重复使用的提示词保存到 `xxx.prompt.md` ,然后通过 `/提示词名称 ` 来触发
-
-
-
-通过自定义代理, 定义有范围工具访问权限的专属AI角色, 用于特定的工作.
-
-
-
-通过代理的skill 技能, 教会 AI 特定领域的流程 ( 测试, 部署, 调试)
-
-
-
-在代理技能的 yaml 前言中写下具体的描述, 说明该技能作用, 以及何时使用, AI用这个字段来决定是否加载这个工具. 
-
-
-
-[GitHub官方收集的一些技能](https://github.com/github/awesome-copilot)
-
-
-
-### 2.5 上下文管理流程
+### 2.5 初始化上下文管理流程
 
 如何利用自定义指令、自定义代理和提示文件在 VS Code 中设置上下文工程工作流程。
 
@@ -236,13 +198,20 @@ Generate a CONTRIBUTING.md (max 1 page) file that describes developer guidelines
 比如: 
 
 ```markdown
-# [Project Name] Guidelines
+## Build Commands
+- `npm run build` - Build the project
+- `npm run test` - Run all tests
+- `npm run lint:fix` - Fix linting issues
 
-* [Product Vision and Goals](../PRODUCT.md): Understand the high-level vision and objectives of the product to ensure alignment with business goals.
-* [System Architecture and Design Principles](../ARCHITECTURE.md): Overall system architecture, design patterns, and design principles that guide the development process.
-* [Contributing Guidelines](../CONTRIBUTING.md): Overview of the project's contributing guidelines and collaboration practices.
+## Code Style
+- Use TypeScript strict mode
+- Prefer functional components over class components
+- Always add JSDoc comments for public APIs
 
-Suggest to update these documents if you find any incomplete or conflicting information during your work.
+## Workflow
+- Run `npm run lint:fix && npm test` after making changes
+- Commit messages follow conventional commits format
+- Create feature branches from `main`
 
 ```
 
