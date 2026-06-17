@@ -698,3 +698,370 @@ bufferize 后 **立刻做三件事之一（或全部）**：
 - CSE (Common Subexpression Elimination) —— 公共子表达式消除
 
 - DCE (Dead Code Elimination) —— 死代码消除
+
+
+
+
+
+
+
+# MLIR的学习重点
+
+- 第一优先级: Dialect的设计
+
+- 第二优先级: Pattern Rewrite 和 Dialect Conversion
+
+  - ```c++
+    RewritePattern
+    OpRewritePattern
+    ConversionPattern
+    ConversionTarget
+    TypeConverter
+    GreedyPatternRewriteDriver
+      
+      1. 一个自定义 Dialect
+    2. 一个自定义 op
+    3. 一个 canonicalization pattern
+    4. 一个 lowering pass
+    5. 一个 TypeConverter
+    6. 一个 ConversionTarget
+    7. 一个 end-to-end mlir-opt 测试
+    ```
+
+- 第三优先级: Pass pipeline 的设计
+
+  - ```c++
+    ```
+
+
+
+
+
+
+
+# 关于方言
+
+
+
+StableHLO 是偏向训练的视角的IR,  哦,这里是一个conv
+
+TOSA 是偏向部署视角的IR, 偶尔会遇到.
+
+Linalg 表达具体的计算视角的IR, 必须理解, tile, fusion, Bufferization, Lowering 都在这里发生
+
+
+
+| 来源框架             | 当前典型路径                                 | IREE入口方言          | 是否主流 | NPU开发者关注度 |
+| -------------------- | -------------------------------------------- | --------------------- | -------- | --------------- |
+| **JAX**              | JAX → StableHLO → IREE                       | StableHLO             | ⭐⭐⭐⭐⭐    | ⭐⭐              |
+| **PyTorch**          | PyTorch → torch.export → StableHLO → IREE    | StableHLO             | ⭐⭐⭐⭐⭐    | ⭐⭐              |
+| **TensorFlow**       | TensorFlow → StableHLO → IREE                | StableHLO             | ⭐⭐⭐⭐     | ⭐⭐              |
+| **TensorFlow Lite**  | TFLite → TOSA → IREE                         | TOSA                  | ⭐⭐⭐⭐     | ⭐⭐⭐             |
+| **ONNX**             | ONNX → ONNX Dialect → Linalg → IREE          | ONNX Dialect / Linalg | ⭐⭐⭐⭐     | ⭐⭐              |
+| **ONNX（新趋势）**   | ONNX → StableHLO → IREE                      | StableHLO             | ⭐⭐⭐      | ⭐⭐              |
+| **MLIR原生输入**     | Linalg → Flow → Stream → HAL                 | Linalg                | ⭐⭐⭐      | ⭐⭐⭐⭐            |
+| **自研NPU Compiler** | 自定义Dialect → Linalg → Flow → Stream → HAL | Linalg                | ⭐⭐⭐      | ⭐⭐⭐⭐⭐           |
+
+
+
+
+
+**我要学习:**
+
+| 方言   | 重要度 | 原因                       |
+| ------ | ------ | -------------------------- |
+| Stream | ⭐⭐⭐⭐⭐  | 调度、资源、依赖、内存规划 |
+| HAL    | ⭐⭐⭐⭐⭐  | Backend接入点              |
+| Linalg | ⭐⭐⭐⭐⭐  | 算子优化和 Lowering 的核心 |
+
+
+
+## 方言定义
+
+
+
+```c++
+def SubOp : ToyOp<"sub", [Pure]> {
+  let summary = "sub operation";
+  let arguments = (ins AnyInteger:$lhs, AnyInteger:$rhs);
+  let results = (outs AnyInteger:$result);
+  let hasVerifier = true;
+}
+
+// hasVerifier
+
+```
+
+
+
+
+
+# MLIR学习的流程
+
+## 1. 第一阶段: 完全熟悉下面这些内容
+
+```c++
+RewritePattern
+OpRewritePattern
+ConversionPattern
+  
+ConversionTarget
+TypeConverter
+  
+  
+GreedyPatternRewriteDriver
+  
+  
+1. 一个自定义 Dialect
+2. 一个自定义 op
+3. 一个 canonicalization pattern  //规范化 / 化简 / 清理 IR。
+4. 一个 lowering pass
+5. 一个 TypeConverter
+6. 一个 ConversionTarget
+7. 一个 end-to-end mlir-opt 测试
+```
+
+
+
+**问题1:**
+
+RewritePattern
+OpRewritePattern
+ConversionPattern
+
+这三个有什么区别?
+
+
+
+
+
+**`RewritePattern` 最底层、最通用；`OpRewritePattern` 是普通 op rewrite 的便捷模板；`ConversionPattern` 是 Dialect Conversion 框架专用的 **
+
+**pattern**。
+
+
+
+- `OpRewritePattern` 官方定义是 `RewritePattern` 的 wrapper，用于直接匹配某个具体 operation class
+- Dialect Conversion 文档则说明 Conversion 框架用于把 illegal operations 转成 conversion target 支持的 legal operations。
+
+| 项目                        | `RewritePattern`  | `OpRewritePattern<OpT>`                | `ConversionPattern`                |
+| --------------------------- | ----------------- | -------------------------------------- | ---------------------------------- |
+| 本质                        | 通用 pattern 基类 | 针对具体 Op 的普通 rewrite             | Dialect Conversion 专用 pattern    |
+| 匹配对象                    | `Operation *`     | 具体 op，例如 `npu::ConvOp`            | 通常也是 op，但服务于 legalization |
+| 常见 rewriter               | `PatternRewriter` | `PatternRewriter`                      | `ConversionPatternRewriter`        |
+| 是否依赖 `ConversionTarget` | 否                | 否                                     | 是，通常配合使用                   |
+| 是否配合 `TypeConverter`    | 一般否            | 一般否                                 | 经常是                             |
+| 是否有 adaptor              | 否                | 否                                     | 有，尤其 `OpConversionPattern`     |
+| 主要用途                    | 通用 rewrite      | canonicalize / fold / peephole / fuse  | dialect lowering / legalize        |
+| 典型例子                    | 匹配任意 op 名字  | `npu.relu(npu.relu(x)) -> npu.relu(x)` | `linalg.matmul -> npu.matmul`      |
+
+
+
+ConversionPattern 还 搭配了下面三个工具: 
+
+| 名称                         | 属于哪套机制       | 作用                        |
+| ---------------------------- | ------------------ | --------------------------- |
+| `ConversionTarget`           | Dialect Conversion | 定义 legal / illegal op     |
+| `TypeConverter`              | Dialect Conversion | 定义类型转换规则            |
+| `GreedyPatternRewriteDriver` | 普通 Rewrite       | 反复应用普通 pattern 到收敛 |
+
+
+
+
+
+具体选择的:
+
+```c++
+做 canonicalization / peephole / fusion：
+  用 OpRewritePattern。
+
+做 linalg -> npu、tensor -> memref、high-npu -> low-npu：
+  用 OpConversionPattern。
+
+需要最底层灵活匹配 Operation *：
+  用 RewritePattern。
+```
+
+
+
+- canonicalization
+
+![image-20260610235944316](/Users/alanchen/Library/Application Support/typora-user-images/image-20260610235944316.png)
+
+
+
+## 2. 第二阶段: pass pipeline的设计
+
+```c++
+提供给它剃光头感叹号用户九宫格火锅哥哥哥哥哥哥哥哥。  
+PreservedAnalyses
+mlir-opt pipeline
+FileCheck 测试
+  
+  
+  
+
+重点不是“怎么写 pass 类”，而是：
+
+哪些变换应该放在 tensor IR？
+哪些变换应该放在 buffer/memref IR？
+哪些变换应该放在 NPU-specific IR？
+ 
+一般经验是：  
+  图优化、算子融合、tile/fuse 尽量在 tensor / linalg 层做；
+地址分配、DMA、bank conflict、buffer reuse 在 memref / NPU 层做；
+descriptor 编码、寄存器字段、binary emit 放在最低层做。
+```
+
+
+
+第三阶段: Linalg / Tensor / MemRef / SCF / Affine
+
+做 NPU 编译器，不建议一开始就完全自造高层 IR。应该充分利用 MLIR 已有 Dialect。
+
+```c++
+tensor.empty
+tensor.extract_slice
+tensor.insert_slice
+tensor.cast
+ranked tensor type
+dynamic shape
+  
+  linalg.generic
+linalg.matmul
+linalg.conv_2d_*
+iterator_types
+indexing_maps
+destination-style op
+  
+  
+memref.alloc
+memref.subview
+memref.load/store
+memref.copy
+strided layout
+memory space
+alignment
+```
+
+
+
+
+
+第四阶段: Bufferization 和 Memory Planning
+
+
+
+MLIR 的 bufferization 是把 tensor semantics 转成 memref semantics 的过程，One-Shot Bufferize 是当前重要的 bufferization pass。
+
+```c++
+tensor -> memref
+destination-passing style
+buffer alias
+in-place bufferization
+alloc / dealloc
+memref layout
+memory space
+ownership-based deallocation
+```
+
+
+
+但注意：MLIR 自带 bufferization 不会自动解决你的 NPU SRAM 分配问题。
+
+你大概率还需要自己做：
+
+```c++
+lifetime analysis
+SRAM allocation
+static memory planning
+tile buffer reuse
+ping-pong buffer
+DMA scheduling
+```
+
+
+
+
+
+第五阶段: ：Shape / Layout / Quantization
+
+```c++
+
+```
+
+
+
+
+
+第六阶段: ODS / TableGen
+
+学习通过DLC来定义 op 和 pass
+
+
+
+第七阶段:Testing / Debugging
+
+
+
+```c++
+mlir-opt // 验证和调试 MLIR pass 的主工具。
+mlir-translate // MLIR 和其他格式之间互转的工具。
+FileCheck // 检查输出文本是否符合预期 的工具。
+lit // LLVM 的 测试运行器。批量运行测试文件里的 // RUN: 命令。
+
+  mlir-opt
+  用来运行 MLIR pass
+
+mlir-translate
+  用来在 MLIR 和外部格式之间转换
+
+FileCheck
+  用来检查命令输出是否符合预期
+
+lit
+  用来批量运行测试
+
+-pass-pipeline
+  用来精确指定 pass 执行顺序和层级
+
+-dump-pass-pipeline
+  用来查看最终 pipeline
+
+-print-ir-before-all
+  用来查看每个 pass 之前的 IR
+
+-print-ir-after-all
+  用来查看每个 pass 之后的 IR
+
+-mlir-print-op-generic
+  用 generic 格式打印 op，方便看清 MLIR 内部结构
+```
+
+
+
+
+
+1. 能看懂IR
+2. 写一个最小的NPU dialact
+3. 从linalg lowing 到 NPU dialect
+4. 加入tiling 和 memory
+5. code gen
+
+
+
+```shell
+1. 能读懂 linalg.matmul / linalg.conv / tensor / memref / scf IR
+2. 能写一个自定义 Dialect
+3. 能定义 3~5 个 NPU op
+4. 能写 verifier 检查 shape/layout/attribute
+5. 能写 canonicalization pattern
+6. 能写一个 conversion pass
+7. 能把 linalg.matmul lower 到 npu.matmul
+8. 能把 tensor IR bufferize 到 memref IR
+9. 能写一个简单 memory planning pass
+10. 能用 mlir-opt + FileCheck 测试每个 pass
+```
+
+
+
