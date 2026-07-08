@@ -1,0 +1,209 @@
+---
+title: 'Util Dialect 详解'
+date: '2026-07-08'
+tags:
+  - IREE
+  - 编译器
+  - MLIR
+  - Pass
+  - Dialect
+  - 编译原理
+  - 调试
+  - 编译优化
+draft: false
+summary: '**Dialect 名称**: `util` **C++ 命名空间**: `::mlir::iree_compiler::IREE::Util` **主要用途**: IREE 各子 Dialect 共享的通用类型和工具 Op --- 1. [概述](#1-概述) 2....'
+---
+
+
+**Dialect 名称**: `util`
+**C++ 命名空间**: `::mlir::iree_compiler::IREE::Util`
+**主要用途**: IREE 各子 Dialect 共享的通用类型和工具 Op
+
+---
+
+## 目录
+
+1. [概述](#1-概述)
+2. [文件结构](#2-文件结构)
+3. [通用类型定义](#3-通用类型定义)
+4. [属性定义](#4-属性定义)
+5. [Op Trait](#5-op-trait)
+6. [基类定义](#6-基类定义)
+7. [关键 Interface](#7-关键-interface)
+8. [核心 Op 列表](#8-核心-op-列表)
+
+---
+
+## 1. 概述
+
+Util Dialect 是 IREE 编译器中**最基础的 Dialect**，为其他所有 IREE Dialect（Flow、Stream、HAL、VM 等）提供共享的类型、属性、接口和工具 Op。
+
+**设计目标**:
+- 提供跨 IREE 子 Dialect 通用的类型定义
+- 统一的基类和接口规范
+- 减少代码重复
+- 促进模块化设计
+
+---
+
+## 2. 文件结构
+
+| 文件 | 内容 | 依赖 |
+|---|---|---|
+| `UtilBase.td` | 核心 Dialect 定义、基础类、通用类型别名、Op Trait | 无（最底层） |
+| `UtilAttrs.td` | 所有 Dialect 特定的 Attribute 定义 | UtilBase.td |
+| `UtilInterfaces.td` | 所有 Dialect 特定的 Interface 定义 | UtilBase.td |
+| `UtilTypes.td` | 所有 Dialect 特定的 Type 定义 | UtilBase.td、UtilInterfaces.td |
+| `UtilOps.td` | 所有 Dialect 特定的 Operation 定义 | UtilBase.td、UtilInterfaces.td、UtilTypes.td |
+
+---
+
+## 3. 通用类型定义
+
+### 类型别名/约束
+
+| 定义名 | 等价类型 | 说明 |
+|---|---|---|
+| `Util_Bool` | `I1` 或 `I8` | 布尔存储类型（1 或 8 位整数） |
+| `Util_Element` | 任意无符号整数或浮点数 | 元素类型 |
+| `Util_Tensor` | `TensorOf<[Util_Element]>` | 包含通用元素的 Tensor |
+| `Util_Primitive` | `Index`、任意整数、任意浮点数 | 原始类型 |
+| `Util_FillPattern` | 整数、浮点数或 Index | 填充模式类型 |
+| `Util_Offset` | `Index` | 偏移量（Index 类型别名） |
+| `Util_Size` | `Index` | 大小（Index 类型别名） |
+| `Util_Range` | `Index` 或任意整数 | 范围类型 |
+| `Util_Status` | `I32` | 状态码（32 位整数） |
+
+---
+
+## 4. 属性定义
+
+| 属性名 | 类型 | 说明 |
+|---|---|---|
+| `Util_IndexAttr` | Index 属性 | 要求是 Index 类型的 IntegerAttr |
+| `Util_TiedOpStorageAttr` | 64 位整数数组 | Tied op 存储属性 |
+| `Util_GlobalRefAttr` | `FlatSymbolRefAttr` | 全局引用属性的别名 |
+| `Util_AnySerializableAttr` | 可序列化属性 | 包括 `DenseElementsAttr`、`DenseResourceElementsAttr` 或实现了 `SerializableAttrInterface` 的属性 |
+| `Util_AnySerializableArrayAttr` | 可序列化数组 | 可序列化属性的数组 |
+| `Util_AliasedSymbolRefAttr` | 符号引用 | 符号引用属性的别名版本 |
+
+---
+
+## 5. Op Trait
+
+| Trait 名称 | C++ 类名 | 用途 |
+|---|---|---|
+| `Util_YieldPoint` | `IREE::Util::YieldPoint` | 标记 yield 语义点 |
+| `Util_Unsafe` | `IREE::Util::Unsafe` | 标记"不安全"的操作。不可信模块中包含此标记的 op 会在运行时验证失败 |
+| `Util_DebugOnly` | `IREE::Util::DebugOnly` | 标记仅在 Debug 构建中有效的操作。会被 `--iree-util-strip-debug-ops` Pass 移除 |
+| `Util_ObjectLike` | `IREE::Util::ObjectLike` | 标记类对象声明的 op（类/表等）。必须是符号表且与上层隔离 |
+| `Util_UnreachableLike` | `IREE::Util::UnreachableLike` | 标记运行时不可达代码的 op |
+
+---
+
+## 6. 基类定义
+
+### Op 基类
+
+```tablegen
+class Util_Op<string mnemonic, list<Trait> traits = []>
+    : Op<Util_Dialect, mnemonic, traits> {
+  let hasCustomAssemblyFormat = 1;    // 使用自定义汇编格式
+  Util_OpDocMetadata docMetadata = ?;  // 可选的文档元数据
+}
+
+class Util_PureOp<string mnemonic, list<Trait> traits = []>
+    : Util_Op<mnemonic, !listconcat(traits, [Pure])>;
+```
+
+### Type 基类
+
+```tablegen
+class Util_TypeDef<string name, list<Trait> traits = []>
+    : TypeDef<Util_Dialect, name, traits> {
+  Util_TypeDocMetadata docMetadata = ?;
+}
+```
+
+### Attr 基类
+
+```tablegen
+class Util_AttrDef<string name, list<Trait> traits = []>
+    : AttrDef<Util_Dialect, name, traits> {
+  Util_AttrDocMetadata docMetadata = ?;
+}
+```
+
+### Interface 基类
+
+```tablegen
+class Util_OpInterface<string name, list<Interface> baseInterfaces = []>
+    : OpInterface<name, baseInterfaces> {
+  let cppNamespace = "::mlir::iree_compiler::IREE::Util";
+}
+```
+
+---
+
+## 7. 关键 Interface
+
+### 7.1 GlobalAccessOpInterface
+
+全局变量访问操作接口，用于标记可以访问全局变量的 Op。
+
+### 7.2 ShapeAwareOpInterface
+
+形状感知操作接口，用于在编译时跟踪和优化张量形状。
+
+### 7.3 TiledOpInterface
+
+支持 tiling 的操作接口，用于代码生成阶段的分块优化。
+
+---
+
+## 8. 核心 Op 列表
+
+### 8.1 全局变量相关
+
+| Op 名称 | 说明 |
+|---|---|
+| `util.global` | 全局变量声明 |
+| `util.global.load` | 加载全局变量 |
+| `util.global.store` | 存储全局变量 |
+
+### 8.2 内存/缓冲区相关
+
+| Op 名称 | 说明 |
+|---|---|
+| `util.buffer` | 缓冲区操作 |
+| `util.buffer.alloc` | 分配缓冲区 |
+| `util.buffer.subspan` | 获取缓冲区子范围 |
+
+### 8.3 控制流相关
+
+| Op 名称 | 说明 |
+|---|---|
+| `util.scf.if` | 结构化控制流 if |
+| `util.scf.for` | 结构化控制流 for 循环 |
+| `util.scf.while` | 结构化控制流 while 循环 |
+
+### 8.4 工具/调试相关
+
+| Op 名称 | 说明 |
+|---|---|
+| `util.unreachable` | 不可达代码标记 |
+| `util.trace` | 追踪操作（调试用） |
+| `util.optimization_barrier` | 优化屏障 |
+
+---
+
+## 总结
+
+Util Dialect 是 IREE 编译器的基础设施层，提供了：
+- ✅ 统一的类型系统基础
+- ✅ 共享的属性定义
+- ✅ 标准 Op Trait 集合
+- ✅ 模块化的基类架构
+- ✅ 跨 Dialect 复用的工具 Op
+
+所有其他 IREE Dialect 都直接或间接地依赖于 Util Dialect。

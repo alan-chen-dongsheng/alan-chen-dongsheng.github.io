@@ -1,0 +1,220 @@
+---
+title: 'VMVX Dialect 详解'
+date: '2026-07-08'
+tags:
+  - IREE
+  - 编译器
+  - MLIR
+  - Pass
+  - Dialect
+  - 编译原理
+  - 编译器后端
+  - 编译优化
+  - LLVM
+  - CPU
+  - GPU
+draft: false
+summary: '**Dialect 名称**: `vmvx` **C++ 命名空间**: `::mlir::iree_compiler::IREE::VMVX` **主要用途**: IREE VM 的向量扩展（Virtual Machine-based Linear Algebra eXtensions） ---...'
+---
+
+
+**Dialect 名称**: `vmvx`
+**C++ 命名空间**: `::mlir::iree_compiler::IREE::VMVX`
+**主要用途**: IREE VM 的向量扩展（Virtual Machine-based Linear Algebra eXtensions）
+
+---
+
+## 目录
+
+1. [概述](#1-概述)
+2. [核心概念](#2-核心概念)
+3. [类型系统](#3-类型系统)
+4. [核心 Op 列表](#4-核心-op-列表)
+5. [在编译 Pipeline 中的位置](#5-在编译-pipeline-中的位置)
+
+---
+
+## 1. 概述
+
+VMVX (Virtual Machine-based Linear Algebra eXtensions) Dialect 是 **IREE VM 的向量扩展**，提供线性代数微内核库功能。
+
+### 设计定位
+
+VMVX 是一个**参考实现 Dialect**，表示基于 IREE VM 的简单线性代数模块，在运行时作为库使用。
+
+**关键特性**:
+- **1:1 映射** - Dialect 中的 ops 与运行时模块中的导出函数大致一一对应
+- **参考实现** - 提供可移植的线性代数微内核实现
+- **无硬件加速时的后备** - 当没有特定后端支持时使用
+- **调试和测试** - 用于验证其他后端的正确性
+
+### 与 VM Dialect 的关系
+
+VMVX ops 是 VM 的**扩展操作**，被编译为对运行时微内核库的函数调用，而不是原生 VM 字节码指令。
+
+### 查看完整操作列表
+
+完整的导出函数列表见 `vmvx.imports.mlir` 文件。
+
+---
+
+## 2. 核心概念
+
+### 2.1 微内核架构
+
+VMVX 采用**微内核架构**：
+- 提供基本线性代数操作的高度优化实现
+- 这些操作作为构建块用于更复杂的计算
+- 运行时动态链接和调用
+
+### 2.2 缓冲区模型
+
+VMVX 操作在抽象缓冲区上工作：
+- **主机缓冲区** - CPU 可访问的内存
+- **设备缓冲区** - 加速器内存（如果适用）
+- **非连续缓冲区** - 支持跨步和切片操作
+
+---
+
+## 3. 类型系统
+
+### 3.1 大小类型
+
+| 类型名 | 别名 | 说明 |
+|---|---|---|
+| `VMVX_DeviceSize` | `Index` | 设备端大小 |
+| `VMVX_HostSize` | `Index` | 主机端大小 |
+| `VMVX_Index` | `Index` | 索引类型 |
+
+### 3.2 缓冲区类型
+
+| 类型名 | 组成 | 说明 |
+|---|---|---|
+| `VMVX_HostBuffer` | `Util_BufferType` | 主机缓冲区 |
+| `VMVX_Buffer` | `Util_BufferType` | 通用缓冲区 |
+| `VMVX_NonContiguousBuffer` | `RankedOrUnrankedMemRefOf` | 可能非连续的缓冲区（来源未知） |
+
+### 3.3 元素类型
+
+VMVX 支持的元素类型：
+- **整数**: `I8`, `I16`, `I32`, `I64`
+- **浮点数**: `F32`, `F64`
+
+---
+
+## 4. 核心 Op 列表
+
+### 4.1 缓冲区操作
+
+| Op 名称 | 说明 |
+|---|---|
+| `vmvx.buffer.alloc` | 分配缓冲区 |
+| `vmvx.buffer.dealloc` | 释放缓冲区 |
+| `vmvx.buffer.copy` | 复制缓冲区数据 |
+| `vmvx.buffer.fill` | 填充缓冲区 |
+
+### 4.2 内存操作
+
+| Op 名称 | 说明 |
+|---|---|
+| `vmvx.load` | 从内存加载 |
+| `vmvx.store` | 存储到内存 |
+| `vmvx.gather` | 聚集加载 |
+| `vmvx.scatter` | 散射存储 |
+
+### 4.3 逐元素操作
+
+| Op 名称 | 说明 |
+|---|---|
+| `vmvx.add` | 逐元素加法 |
+| `vmvx.sub` | 逐元素减法 |
+| `vmvx.mul` | 逐元素乘法 |
+| `vmvx.div` | 逐元素除法 |
+| `vmvx.max` | 逐元素最大值 |
+| `vmvx.min` | 逐元素最小值 |
+| `vmvx.abs` | 逐元素绝对值 |
+| `vmvx.neg` | 逐元素取反 |
+
+### 4.4 矩阵操作
+
+| Op 名称 | 说明 |
+|---|---|
+| `vmvx.matmul` | 矩阵乘法 |
+| `vmvx.matmul.transpose` | 转置矩阵乘法 |
+| `vmvx.batch.matmul` | 批处理矩阵乘法 |
+
+### 4.5 归约操作
+
+| Op 名称 | 说明 |
+|---|---|
+| `vmvx.reduce.sum` | 求和归约 |
+| `vmvx.reduce.max` | 最大值归约 |
+| `vmvx.reduce.min` | 最小值归约 |
+
+### 4.6 卷积操作
+
+| Op 名称 | 说明 |
+|---|---|
+| `vmvx.conv2d` | 2D 卷积 |
+| `vmvx.conv2d.depthwise` | 深度可分离 2D 卷积 |
+
+### 4.7 类型转换
+
+| Op 名称 | 说明 |
+|---|---|
+| `vmvx.cast` | 类型转换 |
+| `vmvx.pack` | 打包数据 |
+| `vmvx.unpack` | 解包数据 |
+
+### 4.8 同步操作
+
+| Op 名称 | 说明 |
+|---|---|
+| `vmvx.barrier` | 内存屏障 |
+| `vmvx.fence` | 执行 fence |
+
+---
+
+## 5. 在编译 Pipeline 中的位置
+
+VMVX Dialect 位于编译 Pipeline 的**代码生成阶段**，作为可选的后端目标：
+
+```
+Flow → Stream → HAL → CodeGen → { LLVM / SPIRV / **VMVX** }
+```
+
+### VMVX Pipeline 阶段
+
+| 顺序 | Pass 名称 | 说明 |
+|---|---|---|
+| 1 | `VMVXSelectLoweringStrategyPass` | 选择 VMVX lowering 策略 |
+| 2 | `VMVXLowerExecutableTargetPass` | 降低可执行目标 |
+| 3 | `VMVXLowerLinalgMicrokernelsPass` | 降低 Linalg 微内核 |
+| 4 | `VMVXAssignConstantOrdinalsPass` | 分配常量序号 |
+| 5 | `VMVXLinkExecutablesPass` | 链接可执行文件 |
+
+### 典型使用场景
+
+| 场景 | 说明 |
+|---|---|
+| **调试模式** | 使用 VMVX 进行快速原型开发和调试 |
+| **无硬件加速** | 在没有 GPU 或专用加速器的系统上运行 |
+| **参考验证** | 用 VMVX 结果验证其他后端的正确性 |
+| **小模型** | 对小模型来说 VMVX 已经足够快 |
+| **可移植性** | 需要在多种平台上无需重新编译运行 |
+
+---
+
+## 总结
+
+VMVX Dialect 是 IREE 的**可移植线性代数微内核层**：
+
+- ✅ IREE VM 的向量扩展
+- ✅ ops 与运行时模块导出函数 1:1 对应
+- ✅ 提供参考实现
+- ✅ 支持整数和浮点数类型
+- ✅ 包含基本线性代数操作（matmul、conv、reduce 等）
+- ✅ 作为无硬件加速时的后备选项
+- ✅ 用于调试和验证其他后端
+
+VMVX 的设计哲学是**可移植优先**，在任何可以运行 IREE VM 的地方都可以使用，是 IREE 多后端支持的关键组成部分。

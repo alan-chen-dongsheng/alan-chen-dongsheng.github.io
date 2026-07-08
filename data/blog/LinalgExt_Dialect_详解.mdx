@@ -1,0 +1,268 @@
+---
+title: 'LinalgExt Dialect 详解'
+date: '2026-07-08'
+tags:
+  - IREE
+  - 编译器
+  - MLIR
+  - Pass
+  - Dialect
+  - 编译原理
+  - 编译器后端
+  - 编译优化
+  - GPU
+draft: false
+summary: '**Dialect 名称**: `iree_linalg_ext` **C++ 命名空间**: `::mlir::iree_compiler::IREE::LinalgExt` **主要用途**: Linalg 非结构化/实验性扩展 --- 1. [概述](#1-概述) 2....'
+---
+
+
+**Dialect 名称**: `iree_linalg_ext`
+**C++ 命名空间**: `::mlir::iree_compiler::IREE::LinalgExt`
+**主要用途**: Linalg 非结构化/实验性扩展
+
+---
+
+## 目录
+
+1. [概述](#1-概述)
+2. [核心概念](#2-核心概念)
+3. [类型和属性](#3-类型和属性)
+4. [核心 Op 列表](#4-核心-op-列表)
+5. [关键 Interface](#5-关键-interface)
+6. [在编译 Pipeline 中的位置](#6-在编译-pipeline-中的位置)
+
+---
+
+## 1. 概述
+
+LinalgExt (Linalg Extensions) Dialect 用于**试验无法由 Linalg Dialect 高效/直接表示的非结构化操作**。
+
+### 设计目标
+
+1. **实验平台** - 试验新的线性代数操作表示
+2. **填补空白** - 提供 Linalg 无法有效表示的操作
+3. **向上游反馈** - 成熟后可能合并到上游 MLIR Linalg
+
+### 与 Linalg 的关系
+
+LinalgExt **扩展**而不是**替代** Linalg：
+- 继承 Linalg 的结构化操作原则
+- 提供 Linalg 中缺失的特殊操作
+- 可以与 Linalg ops 混合使用
+- 最终可以降低为 Linalg 或循环
+
+---
+
+## 2. 核心概念
+
+### 2.1 迭代器类型
+
+LinalgExt 继承并扩展了 Linalg 的迭代器类型概念：
+- **parallel** - 可并行迭代
+- **reduction** - 归约迭代
+- **window** - 窗口/滑动迭代（扩展）
+
+### 2.2 拆分归约
+
+SplitReduction 是 LinalgExt 的关键特性，支持：
+- 将大型归约拆分为多个部分
+- 每个部分可以并行计算
+- 最后合并所有部分的结果
+
+**策略**:
+- `PartialReductionOuterParallel` - 外部并行部分归约
+
+### 2.3 设备映射
+
+LinalgExt ops 支持 `DeviceMappingAttrInterface`，允许：
+- 将循环维度映射到处理元素
+- 支持 GPU thread/workgroup 映射
+- 支持分布式计算
+
+---
+
+## 3. 类型和属性
+
+### 3.1 类型约束
+
+| 约束名 | 说明 |
+|---|---|
+| `AnyRankedTensorOrScalarType` | 任意秩张量或标量（无符号整数/Index/浮点数） |
+
+### 3.2 属性
+
+| 属性名 | 说明 |
+|---|---|
+| `IREELinalgExt_IteratorTypeEnum` | 迭代器类型枚举 |
+| `IREELinalgExt_IteratorTypeArrayAttr` | 迭代器类型数组 |
+| `SplitReductionMappingAttr` | 拆分归约映射属性，实现 `DeviceMappingAttrInterface` |
+
+### 3.3 SplitReductionMappingAttr
+
+**结构**:
+```tablegen
+SplitReductionMappingAttr {
+  int64_t dimension;  // 要拆分和分发的维度
+}
+```
+
+**用途**:
+- 指示 `scf.forall` 表示通过 `PartialReductionOuterParallel` 策略生成的并行部分归约
+- 用于归约 tiling 和分发
+
+---
+
+## 4. 核心 Op 列表
+
+### 4.1 Attention 操作
+
+| Op 名称 | 说明 |
+|---|---|
+| `iree_linalg_ext.attention` | 标准 Attention 操作（Q × K^T × V） |
+| `iree_linalg_ext.attention_softmax` | 带 Softmax 的 Attention |
+| `iree_linalg_ext.attention_batched` | 批处理 Attention |
+| `iree_linalg_ext.online_attention` | 在线/流式 Attention（节省内存） |
+| `iree_linalg_ext.convert_attention_to_online` | 将标准 Attention 转为在线 Attention |
+
+### 4.2 卷积操作
+
+| Op 名称 | 说明 |
+|---|---|
+| `iree_linalg_ext.winograd_conv2d` | Winograd 快速卷积 |
+| `iree_linalg_ext.winograd_input_transform` | Winograd 输入变换 |
+| `iree_linalg_ext.winograd_filter_transform` | Winograd 滤波器变换 |
+| `iree_linalg_ext.winograd_output_transform` | Winograd 输出变换 |
+| `iree_linalg_ext.im2col` | Image to Column 变换 |
+| `iree_linalg_ext.conv_to_im2col` | 将 Conv 转为 Im2Col |
+
+### 4.3 排序和 TopK
+
+| Op 名称 | 说明 |
+|---|---|
+| `iree_linalg_ext.sort` | 排序操作 |
+| `iree_linalg_ext.topk` | Top-K 选择 |
+| `iree_linalg_ext.topk_split_reduction` | Top-K 拆分归约 |
+| `iree_linalg_ext.argsort` | Argsort（返回索引） |
+
+### 4.4 填充和打包
+
+| Op 名称 | 说明 |
+|---|---|
+| `iree_linalg_ext.pad_contraction_to_block_size` | 填充 contraction 到块大小 |
+| `iree_linalg_ext.pack` | 打包张量 |
+| `iree_linalg_ext.unpack` | 解包张量 |
+| `iree_linalg_ext.fold_unit_extent_dims` | 折叠单位维度 |
+
+### 4.5 数据移动
+
+| Op 名称 | 说明 |
+|---|---|
+| `iree_linalg_ext.gather` | 聚集操作 |
+| `iree_linalg_ext.scatter` | 散射操作 |
+| `iree_linalg_ext.scatter_update` | 散射更新 |
+
+### 4.6 张量形状操作
+
+| Op 名称 | 说明 |
+|---|---|
+| `iree_linalg_ext.transpose` | 转置操作 |
+| `iree_linalg_ext.broadcast` | 广播操作 |
+| `iree_linalg_ext.reshape` | 重塑形状 |
+| `iree_linalg_ext.squeeze` | 压缩单位维度 |
+| `iree_linalg_ext.unsqueeze` | 扩展单位维度 |
+| `iree_linalg_ext.slice` | 切片操作 |
+| `iree_linalg_ext.tile` | 张量分块 |
+
+### 4.7 量化操作
+
+| Op 名称 | 说明 |
+|---|---|
+| `iree_linalg_ext.quantized_matmul` | 量化矩阵乘法 |
+| `iree_linalg_ext.quantize` | 量化操作 |
+| `iree_linalg_ext.dequantize` | 反量化操作 |
+
+### 4.8 聚合操作
+
+| Op 名称 | 说明 |
+|---|---|
+| `iree_linalg_ext.aggregate` | 通用聚合操作 |
+| `iree_linalg_ext.aggregate_sum` | 聚合求和 |
+| `iree_linalg_ext.aggregate_max` | 聚合最大值 |
+| `iree_linalg_ext.aggregate_min` | 聚合最小值 |
+| `iree_linalg_ext.aggregate_prod` | 聚合乘积 |
+
+### 4.9 测试和调试
+
+| Op 名称 | 说明 |
+|---|---|
+| `iree_linalg_ext.test_reshape_fusion` | 测试 Reshape 融合 |
+
+---
+
+## 5. 关键 Interface
+
+### 5.1 DeviceMappingAttrInterface
+
+设备映射属性接口，允许：
+- 将循环维度映射到处理元素
+- 支持 GPU thread/workgroup 层级
+- 支持分布式计算设备
+- 由 `SplitReductionMappingAttr` 实现
+
+---
+
+## 6. 在编译 Pipeline 中的位置
+
+LinalgExt Dialect 主要在**全局优化阶段**和**代码生成阶段**使用：
+
+```
+Input → GlobalOptimization → DispatchCreation → Flow → ...
+                           ↑
+                    LinalgExt ops
+```
+
+### 典型 Pass 顺序
+
+| 顺序 | Pass 名称 | 说明 |
+|---|---|---|
+| 1 | `ConvertAttentionToOnlineAttentionPass` | 将 Attention 转为在线 Attention |
+| 2 | `DecomposeAttentionPass` | 分解 Attention 操作 |
+| 3 | `ConvertConv2DToWinogradPass` | 将 Conv2D 转为 Winograd |
+| 4 | `DecomposeWinogradTransformPass` | 分解 Winograd 变换 |
+| 5 | `ConvertConvToIm2ColOpPass` | 将 Conv 转为 Im2Col |
+| 6 | `DecomposeIm2colPass` | 分解 Im2Col |
+| 7 | `DecomposeAggregatedOpPass` | 分解聚合操作 |
+| 8 | `PadContractionToBlockSizePass` | 填充 contraction 到块大小 |
+| 9 | `FoldUnitExtentDimsPass` | 折叠单位维度 |
+| 10 | `TopkSplitReductionPass` | TopK 拆分归约 |
+| 11 | `LinalgExtToLoopsPass` | 将 LinalgExt ops 转为循环 |
+
+### 降低策略
+
+LinalgExt ops 可以通过多种方式降低：
+
+| 降低目标 | 说明 |
+|---|---|
+| **Linalg ops** | 降低为标准 Linalg 操作（如 generic） |
+| **SCF loops** | 直接降低为结构化控制流循环 |
+| **Tensor ops** | 降低为张量操作 |
+| **微内核** | 降低为特定后端的微内核调用 |
+
+---
+
+## 总结
+
+LinalgExt Dialect 是 IREE 的**线性代数实验平台**：
+
+- ✅ 扩展 Linalg 提供非结构化操作
+- ✅ 支持 Attention、Winograd 卷积、TopK 等高级操作
+- ✅ 提供拆分归约和设备映射功能
+- ✅ 作为新操作的试验场
+- ✅ 可以降低为 Linalg、循环或张量操作
+- ✅ 位于 GlobalOptimization 和 DispatchCreation 阶段
+
+LinalgExt 使得 IREE 能够：
+1. 试验前沿的线性代数操作
+2. 优化无法用标准 Linalg 有效表示的操作
+3. 提供更丰富的操作集支持现代 AI 模型
+4. 向上游 MLIR 反馈成功的设计

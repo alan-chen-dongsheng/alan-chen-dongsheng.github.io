@@ -1,0 +1,371 @@
+---
+title: 'HAL Dialect 详解'
+date: '2026-07-08'
+tags:
+  - IREE
+  - 编译器
+  - MLIR
+  - Pass
+  - Dialect
+  - 编译原理
+  - 编译器后端
+  - 编译优化
+  - LLVM
+  - CPU
+  - GPU
+  - CUDA
+  - Vulkan
+draft: false
+summary: '**Dialect 名称**: `hal` **C++ 命名空间**: `::mlir::iree_compiler::IREE::HAL` **主要用途**: 硬件抽象层（Vulkan-like，无图形部分） --- 1. [概述](#1-概述) 2. [文件结构](#2-文件结构) 3....'
+---
+
+
+**Dialect 名称**: `hal`
+**C++ 命名空间**: `::mlir::iree_compiler::IREE::HAL`
+**主要用途**: 硬件抽象层（Vulkan-like，无图形部分）
+
+---
+
+## 目录
+
+1. [概述](#1-概述)
+2. [文件结构](#2-文件结构)
+3. [核心概念](#3-核心概念)
+4. [类型系统](#4-类型系统)
+5. [枚举和属性](#5-枚举和属性)
+6. [核心 Op 列表](#6-核心-op-列表)
+7. [关键 Interface](#7-关键-interface)
+8. [在编译 Pipeline 中的位置](#8-在编译-pipeline-中的位置)
+
+---
+
+## 1. 概述
+
+HAL (Hardware Abstraction Layer) Dialect 是 IREE 编译器的**硬件抽象层**，可以被视为一个**去除了所有图形部分的 Vulkan-like 模型**。
+
+### 设计目标
+
+1. **1:1 API 映射** - 大部分操作与 `iree::hal` C API 直接对应
+2. **设备无关** - 提供统一的硬件抽象，支持在多种设备上运行
+3. **安全限制** - 省略某些不安全或在 IR 中不太可能需要的方法
+4. **可序列化** - 类型集合限制为 IREE HAL 设计中可以表示的类型
+
+### 关键特性
+
+HAL Dialect 的设计使得**任何实现 HAL 接口的设备都可以运行序列器操作**。例如：
+- GPU 可以通过间接命令缓冲区运行
+- CPU 可以通过多线程任务系统运行
+- 其他加速器可以通过各自的驱动运行
+
+### 省略的功能
+
+某些功能被省略是因为：
+- **序列器接口封装** - 如设备解析逻辑由序列器封装
+- **用户输入安全** - 某些特性暴露给用户定义的输入不安全
+
+---
+
+## 2. 文件结构
+
+| 文件 | 内容 | 依赖 |
+|---|---|---|
+| `HALDialect.td` | 核心 Dialect 定义 | 无 |
+| `HALBase.td` | 基础类（Op、Type、Attr、Interface）、通用类型别名、Op Trait | HALDialect.td |
+| `HALAttrs.td` | 所有 Dialect 特定的 Attribute 和枚举定义 | HALBase.td、HALTypes.td |
+| `HALInterfaces.td` | 所有 Dialect 特定的 Interface 定义 | UtilBase.td |
+| `HALTypes.td` | 所有 Dialect 特定的 Type 定义 | HALBase.td、HALInterfaces.td |
+| `HALOps.td` | 所有 Dialect 特定的 Operation 定义 | HALBase.td、HALAttrs.td、HALTypes.td |
+
+---
+
+## 3. 核心概念
+
+### 3.1 执行模型
+
+HAL Dialect 采用**显式异步执行模型**：
+1. **命令缓冲区** (`hal.command_buffer`) - 记录命令供以后提交
+2. **队列提交** - 将命令缓冲区提交到设备队列
+3. **同步原语** - 信号量、fence、event 用于协调执行
+
+### 3.2 内存模型
+
+HAL Dialect 定义了灵活的内存模型：
+- **主机可访问** - CPU 可以直接访问
+- **主机一致性** - 主机和设备之间自动同步
+- **设备可访问** - 设备可以访问用于各种用途
+
+### 3.3 可执行文件
+
+HAL Executable 代表**已准备好并可以 dispatch 的可执行文件**，包含：
+- 一个或多个目标后端的编译代码
+- 入口点（dispatchable functions）
+- 布局和绑定信息
+
+---
+
+## 4. 类型系统
+
+### 4.1 对象类型
+
+| 类型名 | MLIR 语法 | 说明 |
+|---|---|---|
+| `HAL_Allocator` | `!hal.allocator` | 为特定设备内存空间分配缓冲区 |
+| `HAL_Buffer` | `!hal.buffer` | 具有特定 memory_type 的内存缓冲区，描述后备内存的能力和行为 |
+| `HAL_BufferView` | `!hal.buffer_view` | 带形状和类型的缓冲区引用，包装现有的 hal.buffer 及其元数据，便于跨 ABI 边界传递 |
+| `HAL_Channel` | `!hal.collective.channel` | 集体通信通道标识符，允许参与多个集体组 |
+| `HAL_CommandBuffer` | `!hal.command_buffer` | 异步命令缓冲区记录接口，命令由实现记录供以后提交到命令队列 |
+| `HAL_Device` | `!hal.device` | 逻辑设备实例 |
+| `HAL_Event` | `!hal.event` | 用于在 CommandBuffer 内定义同步范围，仅存在于单个 CommandBuffer 内 |
+| `HAL_Executable` | `!hal.executable` | 已准备好并可以 dispatch 的可执行文件 |
+| `HAL_Fence` | `!hal.fence` | 一组信号量时间点，定义跨多个时间线的公共时间点 |
+| `HAL_File` | `!hal.file` | 无状态文件句柄，可以使用队列有序的传输操作进行读/写 |
+
+### 4.2 类型分类
+
+| 分类 | 包含类型 |
+|---|---|
+| `HAL_ObjectType` | Allocator、Buffer、BufferView、CommandBuffer、Device、Event、Executable、Fence、File |
+| `HAL_BufferType` | Buffer |
+| `HAL_Ordinal` | Index 类型别名（用于序号） |
+
+---
+
+## 5. 枚举和属性
+
+### 5.1 内存类型（MemoryType）
+
+| 标志 | 说明 |
+|---|---|
+| `DeviceLocal` | 设备本地内存（设备访问最快） |
+| `HostVisible` | 主机可见（主机可以映射和访问） |
+| `HostCoherent` | 主机一致（主机和设备之间自动同步） |
+| `HostCached` | 主机缓存（主机访问可能缓存） |
+| `LazilyAllocated` | 延迟分配 |
+
+### 5.2 缓冲区用途（BufferUsage）
+
+| 标志 | 说明 |
+|---|---|
+| `TransferSrc` | 传输源 |
+| `TransferDst` | 传输目标 |
+| `Uniform` | 统一缓冲区 |
+| `Storage` | 存储缓冲区 |
+| `Indirect` | 间接命令参数 |
+| `Dispatch` | Dispatch 操作使用 |
+
+### 5.3 设备特性（DeviceBitfield）
+
+| 标志 | 说明 |
+|---|---|
+| `SupportsDispatch` | 支持 dispatch 操作 |
+| `SupportsSubgroups` | 支持 subgroup 操作 |
+| `SupportsRankReduction` | 支持 rank reduction |
+
+### 5.4 执行模式（ExecutionStage）
+
+| 阶段 | 说明 |
+|---|---|
+| `CommandIssue` | 命令发出阶段 |
+| `CommandExecute` | 命令执行阶段 |
+| `Transfer` | 传输操作阶段 |
+| `Dispatch` | Dispatch 操作阶段 |
+
+---
+
+## 6. 核心 Op 列表
+
+### 6.1 设备管理
+
+| Op 名称 | 说明 |
+|---|---|
+| `hal.devices.all` | 获取所有可用设备 |
+| `hal.device.query` | 查询设备特性 |
+| `hal.device.match` | 匹配设备配置 |
+| `hal.device.select` | 选择设备 |
+| `hal.device.ordinal` | 获取设备序号 |
+
+### 6.2 命令缓冲区
+
+| Op 名称 | 说明 |
+|---|---|
+| `hal.command_buffer.create` | 创建命令缓冲区 |
+| `hal.command_buffer.begin` | 开始记录 |
+| `hal.command_buffer.end` | 结束记录 |
+| `hal.command_buffer.execution_barrier` | 执行屏障 |
+| `hal.command_buffer.submit` | 提交命令缓冲区 |
+
+### 6.3 缓冲区操作
+
+| Op 名称 | 说明 |
+|---|---|
+| `hal.allocator.allocate` | 分配缓冲区 |
+| `hal.allocator.deallocate` | 释放缓冲区 |
+| `hal.allocator.allocate.constant` | 分配常量缓冲区 |
+| `hal.buffer.map` | 映射缓冲区到主机 |
+| `hal.buffer.unmap` | 解除缓冲区映射 |
+| `hal.buffer.subspan` | 获取缓冲区子范围 |
+| `hal.buffer.length` | 获取缓冲区长度 |
+| `hal.buffer.memory.type` | 获取缓冲区内存类型 |
+
+### 6.4 BufferView 操作
+
+| Op 名称 | 说明 |
+|---|---|
+| `hal.buffer.view.create` | 创建 BufferView |
+| `hal.buffer.view.buffer` | 获取底层 Buffer |
+| `hal.buffer.view.type` | 获取元素类型 |
+| `hal.buffer.view.shape` | 获取形状 |
+| `hal.buffer.view.length` | 获取总字节长度 |
+
+### 6.5 可执行文件管理
+
+| Op 名称 | 说明 |
+|---|---|
+| `hal.executable.create` | 创建可执行文件 |
+| `hal.executable.lookup` | 查找可执行文件 |
+| `hal.executable.export` | 导出函数入口点 |
+| `hal.executable.constant` | 可执行文件常量 |
+
+### 6.6 Dispatch 操作
+
+| Op 名称 | 说明 |
+|---|---|
+| `hal.command_buffer.dispatch` | 发出 dispatch 命令 |
+| `hal.command_buffer.dispatch.indirect` | 间接 dispatch |
+| `hal.descriptor.set.layout.create` | 创建描述符集布局 |
+| `hal.pipeline.layout.create` | 创建管线布局 |
+
+### 6.7 同步操作
+
+| Op 名称 | 说明 |
+|---|---|
+| `hal.fence.create` | 创建 fence |
+| `hal.fence.join` | 等待多个 fence |
+| `hal.fence.signal` | 发送 fence 信号 |
+| `hal.fence.wait` | 等待 fence 完成 |
+| `hal.event.create` | 创建 event |
+| `hal.event.signal` | 发送 event 信号 |
+| `hal.event.wait` | 等待 event |
+
+### 6.8 集体通信
+
+| Op 名称 | 说明 |
+|---|---|
+| `hal.channel.create` | 创建集体通信通道 |
+| `hal.channel.rank` | 获取 rank |
+| `hal.channel.count` | 获取总数 |
+| `hal.command_buffer.all.reduce` | 所有设备归约 |
+| `hal.command_buffer.all.gather` | 所有设备收集 |
+| `hal.command_buffer.all.to.all` | 全交换 |
+| `hal.command_buffer.reduce.scatter` | 归约散射 |
+
+### 6.9 队列操作
+
+| Op 名称 | 说明 |
+|---|---|
+| `hal.queue.transfer.read` | 队列传输读取 |
+| `hal.queue.transfer.write` | 队列传输写入 |
+| `hal.queue.transfer.copy` | 队列传输复制 |
+| `hal.queue.execute` | 队列执行命令缓冲区 |
+
+### 6.10 文件操作
+
+| Op 名称 | 说明 |
+|---|---|
+| `hal.file.map` | 映射文件 |
+| `hal.file.unmap` | 解除文件映射 |
+| `hal.file.read` | 读取文件 |
+| `hal.file.write` | 写入文件 |
+
+---
+
+## 7. 关键 Interface
+
+### 7.1 DeviceTargetInterface
+
+设备目标接口，用于定义目标设备的特性和能力。
+
+### 7.2 ExecutableObjectInterface
+
+可执行文件对象接口，标记可以作为可执行文件内容的操作。
+
+### 7.3 RuntimeHostInterface
+
+运行时宿主接口，支持与主机运行时交互的操作。
+
+---
+
+## 8. 在编译 Pipeline 中的位置
+
+HAL Dialect 位于编译 Pipeline 的**后期阶段**，是最后一个 IR 表示层：
+
+```
+Input → GlobalOptimization → DispatchCreation → Flow → Stream → **HAL** → VM
+```
+
+### HAL Pipeline 阶段
+
+#### 阶段 1: 配置
+
+| 顺序 | Pass 名称 | 说明 |
+|---|---|---|
+| 1 | `MaterializeDispatchInstrumentationPass` | 具体化 dispatch 插桩 |
+| 2 | `MaterializeInterfacesPass` | 具体化接口 |
+| 3 | `PruneExecutablesPass` | 裁剪可执行文件 |
+| 4 | `ConfigureExecutablesPass` | 配置可执行文件 |
+
+#### 阶段 2: 翻译
+
+| 顺序 | Pass 名称 | 说明 |
+|---|---|---|
+| 1 | `TranslateAllExecutablesPass` | 翻译所有可执行文件到目标后端 |
+
+#### 阶段 3: 后处理
+
+| 顺序 | Pass 名称 | 说明 |
+|---|---|---|
+| 1 | `ConvertToHALPass` | 转换到 HAL Dialect |
+| 2 | `OutlineMemoizeRegionsPass` | 提取 memoize 区域 |
+| 3 | `PruneExecutablesPass` | 再次裁剪可执行文件 |
+| 4 | `LinkAllExecutablesPass` | 链接所有可执行文件 |
+| 5 | `ResolveExportOrdinalsPass` | 解析导出序号 |
+| 6 | `MaterializeResourceCachesPass` | 具体化资源缓存 |
+| 7 | `InitializeDevicesPass` | 初始化设备 |
+
+#### 阶段 4: 序列化
+
+| 顺序 | Pass 名称 | 说明 |
+|---|---|---|
+| 1 | `SerializeAllExecutablesPass` | 序列化所有可执行文件 |
+
+### 目标后端翻译
+
+HAL Dialect 支持多种目标后端：
+
+| 后端 | 翻译输出 |
+|---|---|
+| **LLVM CPU** | LLVM IR → 原生机器码 |
+| **CUDA** | PTX 汇编 → GPU 机器码 |
+| **Vulkan** | SPIR-V → 着色器字节码 |
+| **Metal** | Metal Shading Language → 二进制 |
+| **VMVX** | 虚拟机字节码 |
+
+---
+
+## 总结
+
+HAL Dialect 是 IREE 编译器的**硬件抽象核心**：
+
+- ✅ 提供 Vulkan-like 的低级硬件抽象（无图形部分）
+- ✅ 与 IREE HAL C API 大致 1:1 对应
+- ✅ 支持多种设备类型和后端
+- ✅ 显式异步执行模型
+- ✅ 灵活的内存类型系统
+- ✅ 完整的同步原语（信号量、fence、event）
+- ✅ 集体通信支持
+
+HAL Dialect 是连接高级 IR 和实际硬件执行的最后桥梁，使得 IREE 能够：
+1. 在各种硬件上高效执行
+2. 利用设备特定的优化
+3. 支持显式异步和并发执行
+4. 提供统一的编程模型

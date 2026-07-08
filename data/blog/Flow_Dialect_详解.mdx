@@ -1,0 +1,271 @@
+---
+title: 'Flow Dialect 详解'
+date: '2026-07-08'
+tags:
+  - IREE
+  - 编译器
+  - MLIR
+  - Pass
+  - Dialect
+  - 编译原理
+  - 编译器后端
+  - 编译优化
+  - LLVM
+  - CPU
+  - GPU
+  - Vulkan
+draft: false
+summary: '**Dialect 名称**: `flow` **C++ 命名空间**: `::mlir::iree_compiler::IREE::Flow` **主要用途**: 建模执行数据流和分区（dispatch region） --- 1. [概述](#1-概述) 2. [文件结构](#2-文件结构)...'
+---
+
+
+**Dialect 名称**: `flow`
+**C++ 命名空间**: `::mlir::iree_compiler::IREE::Flow`
+**主要用途**: 建模执行数据流和分区（dispatch region）
+
+---
+
+## 目录
+
+1. [概述](#1-概述)
+2. [文件结构](#2-文件结构)
+3. [核心概念](#3-核心概念)
+4. [类型定义](#4-类型定义)
+5. [枚举定义](#5-枚举定义)
+6. [核心 Op 列表](#6-核心-op-列表)
+7. [关键 Interface](#7-关键-interface)
+8. [在编译 Pipeline 中的位置](#8-在编译-pipeline-中的位置)
+
+---
+
+## 1. 概述
+
+Flow Dialect 是 IREE 编译器中**最重要的 Dialect 之一**，负责建模稠密计算区域及其之间的数据流。它使用 MLIR 值语义张量作为主要数据类型，利用 SSA use-def 链提供计算分区和提取所需的基础设施。
+
+### 设计目标
+
+1. **摄入高层线性代数运算** - 支持 XLA HLO ops 和 MLIR 标准 ops
+2. **分区计算区域** - 将计算划分为包含简单且兼容计算的区域
+3. **提取可执行代码** - 将计算提取到可执行模块中，仅保留通过 dispatch 操作编码的执行流
+4. **支持 SPMD 执行模型** - 建模可并行化的计算工作负载
+
+### Dispatch Region 概念
+
+"Dispatch region" 是 Flow Dialect 的核心概念，代表可以高效（且安全）地一起调度的兼容计算。
+
+"兼容" 指的是具有相似形状的工作负载，这些形状指示了在 SPMD（Single Program, Multiple Data）执行模型中运行时，计算可以并行化的调用次数。具体包括：
+- GPU dispatches 中的 untiled 工作负载（或 tiled workgroups）
+- 类似的线程池执行器
+
+---
+
+## 2. 文件结构
+
+| 文件 | 内容 |
+|---|---|
+| `FlowBase.td` | Dialect 定义、基类、类型别名、枚举 |
+| `FlowOps.td` | Flow Dialect 的所有 Operation 定义 |
+| `FlowTypes.td` | Flow Dialect 的类型定义 |
+| `FlowAttrs.td` | Flow Dialect 的属性定义 |
+| `FlowInterfaces.td` | Flow Dialect 的接口定义 |
+| `FlowTensorOps.td` | Tensor 相关操作 |
+
+---
+
+## 3. 核心概念
+
+### 3.1 数据流建模
+
+Flow Dialect 使用**值语义张量**（value-semantic tensors）作为主要数据类型，利用 MLIR 的 SSA use-def 链来：
+- 追踪数据依赖关系
+- 执行计算分区
+- 提取（outline）计算到可执行模块
+
+### 3.2 Dispatch Region 识别
+
+识别 dispatchable 区域后，执行一系列转换：
+1. **折叠和简化** - 减少 dispatch 的总数
+2. **特殊 op 调度** - 使用启发式方法更有效地调度特殊 ops（如 GEMM）
+3. **配置文件引导分析** - 设计支持未来添加 PGO（Profile-Guided Optimization）
+
+### 3.3 可执行模块提取
+
+提取后的可执行模块包含 dispatchable 代码，可以翻译到一个或多个后端：
+- SPIR-V（用于 Vulkan）
+- LLVM IR（用于 CPU）
+- 其他支持摄入该输入格式的 MLIR 目标
+
+---
+
+## 4. 类型定义
+
+| 类型名 | 定义 | 说明 |
+|---|---|---|
+| `FLOW_PrimitiveType` | `Index`、任意无符号整数、任意浮点数、任意复数 | 原始类型集合 |
+| `FLOW_Dim` | `Index` | 维度类型（Index 别名） |
+| `FLOW_ShapeDynamicDims` | `Variadic<FLOW_Dim>` | 形状动态维度（可变参数） |
+| `FLOW_Tensor` | `AnyRankedTensor` | 张量类型别名 |
+| `FLOW_ExecutableRefAttr` | `Util_AliasedSymbolRefAttr` | 可执行文件引用属性 |
+| `FLOW_GlobalRefAttr` | `Util_AliasedSymbolRefAttr` | 全局变量引用属性 |
+| `FLOW_GlobalPtr` | Tensor 或 PrimitiveType 的指针 | 全局变量指针类型 |
+| `FLOW_Channel` | `Channel` 类型 | 集体通信通道 |
+
+### Channel 类型
+
+`flow.channel` 表示集体通信团（collective clique）中的单个参与者。
+- 同一程序中可能存在多个通道，以支持部分操作或分层操作
+- 在编译前已分区的程序中通常只有一个通道，可使用 `flow.channel.default` 引用
+- 在内部建模 SPMD 行为的程序中，通道可以由宿主应用程序创建或提供
+
+---
+
+## 5. 枚举定义
+
+### 5.1 CollectiveElementType（集体操作元素类型）
+
+| 枚举值 | 数值 | 缩写 | 说明 |
+|---|---|---|---|
+| `Sint8` | 0 | `si8` | 8 位有符号整数 |
+| `Uint8` | 1 | `ui8` | 8 位无符号整数 |
+| `Sint16` | 2 | `si16` | 16 位有符号整数 |
+| `Uint16` | 3 | `ui16` | 16 位无符号整数 |
+| `Sint32` | 4 | `si32` | 32 位有符号整数 |
+| `Uint32` | 5 | `ui32` | 32 位无符号整数 |
+| `Sint64` | 6 | `si64` | 64 位有符号整数 |
+| `Uint64` | 7 | `ui64` | 64 位无符号整数 |
+| `Float16` | 8 | `f16` | 16 位浮点数 |
+| `Float32` | 9 | `f32` | 32 位浮点数 |
+| `Float64` | 10 | `f64` | 64 位浮点数 |
+| `BFloat16` | 11 | `bf16` | BFloat16 浮点数 |
+
+### 5.2 CollectiveReductionOp（集体归约操作）
+
+| 枚举值 | 数值 | 缩写 | 说明 |
+|---|---|---|---|
+| `None` | 0 | `none` | 无操作 |
+| `ReductionSum` | 1 | `sum` | 求和归约 |
+| `ReductionProduct` | 2 | `product` | 乘积归约 |
+| `ReductionMinimum` | 3 | `minimum` | 最小值归约 |
+| `ReductionMaximum` | 4 | `maximum` | 最大值归约 |
+| `ReductionAverage` | 5 | `average` | 平均值归约 |
+
+> **注意**: 这些枚举值必须与 Stream Dialect 中对应的 reduction op 枚举值完全匹配。
+
+---
+
+## 6. 核心 Op 列表
+
+### 6.1 Dispatch 相关 Op
+
+| Op 名称 | 说明 |
+|---|---|
+| `flow.dispatch.region` | 定义 dispatch 区域 |
+| `flow.dispatch.tensor.load` | 从 dispatch tensor 加载 |
+| `flow.dispatch.tensor.store` | 存储到 dispatch tensor |
+| `flow.dispatch.workgroup.id` | 获取 workgroup ID |
+| `flow.dispatch.workgroup.count` | 获取 workgroup 数量 |
+| `flow.dispatch.workgroup.size` | 获取 workgroup 大小 |
+
+### 6.2 张量操作
+
+| Op 名称 | 说明 |
+|---|---|
+| `flow.tensor.splat` | 生成填充张量 |
+| `flow.tensor.clone` | 克隆张量 |
+| `flow.tensor.slice` | 切片张量 |
+| `flow.tensor.update` | 更新张量 |
+
+### 6.3 集体通信操作
+
+| Op 名称 | 说明 |
+|---|---|
+| `flow.channel.default` | 默认集体通信通道 |
+| `flow.channel.create` | 创建集体通信通道 |
+| `flow.all.reduce` | 所有设备归约 |
+| `flow.all.gather` | 所有设备收集 |
+| `flow.all.to_all` | 全交换操作 |
+| `flow.reduce.scatter` | 归约散射操作 |
+
+### 6.4 可执行文件相关
+
+| Op 名称 | 说明 |
+|---|---|
+| `flow.executable` | 可执行文件声明 |
+| `flow.executable.export` | 可执行文件导出 |
+| `flow.executable.library` | 可执行文件库 |
+
+### 6.5 全局变量操作
+
+| Op 名称 | 说明 |
+|---|---|
+| `flow.globals.load` | 加载全局变量 |
+| `flow.globals.store` | 存储全局变量 |
+
+---
+
+## 7. 关键 Interface
+
+### 7.1 DispatchOpInterface
+
+所有 dispatch 操作实现的接口，提供：
+- 访问 workgroup 数量/大小
+- 获取调度信息
+- 访问输入/输出张量
+
+### 7.2 DispatchWorkgroupInfoInterface
+
+提供 workgroup 信息的接口，包括：
+- Workgroup ID
+- Workgroup 数量
+- Workgroup 大小
+
+---
+
+## 8. 在编译 Pipeline 中的位置
+
+Flow Dialect 位于编译 Pipeline 的**中期阶段**：
+
+```
+Input → GlobalOptimization → DispatchCreation → **FLOW** → Stream → HAL → VM
+```
+
+### Flow Pipeline 的典型 Pass 顺序
+
+| 顺序 | Pass 名称 | 说明 |
+|---|---|---|
+| 1 | `VerifyInputLegalityPass` | 验证输入合法性 |
+| 2 | `InitializeEmptyTensorsPass` | 初始化空张量 |
+| 3 | `CaptureDynamicDimsPass` | 捕获动态维度 |
+| 4 | `FormDispatchRegionsPass` | 形成 dispatch 区域 |
+| 5 | `OutlineDispatchRegionsPass` | 提取 dispatch 区域 |
+| 6 | `OutlineDispatchExternsPass` | 提取外部 dispatch |
+| 7 | `AnnotateDispatchesPass` | 注解 dispatch 信息 |
+| 8 | `DeduplicateExecutablesPass` | 去重可执行文件 |
+| 9 | `ReplicateGlobalsPerAffinityPass` | 按亲和性复制全局变量 |
+
+### 关键转换流程
+
+1. **输入验证** - 确保 IR 符合 Flow Dialect 的要求
+2. **维度捕获** - 捕获和规范化动态维度信息
+3. **区域形成** - 将兼容的计算组合成 dispatch regions
+4. **代码提取** - 将 dispatch regions 提取为独立的可执行模块
+5. **去重优化** - 移除重复的可执行文件
+6. **设备亲和性** - 根据目标设备特性进行优化
+
+---
+
+## 总结
+
+Flow Dialect 是 IREE 编译器的**核心中间表示层**：
+
+- ✅ 负责将高层计算划分为可调度的 dispatch regions
+- ✅ 利用 SSA use-def 链进行数据流分析
+- ✅ 支持集体通信操作（all-reduce、all-gather 等）
+- ✅ 将计算提取为可翻译到多后端的可执行模块
+- ✅ 是连接高层优化（GlobalOptimization）和底层调度（Stream/HAL）的关键桥梁
+
+Flow Dialect 的设计使得 IREE 能够：
+1. 高效地并行化计算
+2. 支持多种硬件后端
+3. 进行跨设备的集体通信
+4. 实现灵活的调度策略

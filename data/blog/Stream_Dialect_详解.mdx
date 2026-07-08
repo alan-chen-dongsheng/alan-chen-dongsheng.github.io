@@ -1,0 +1,308 @@
+---
+title: 'Stream Dialect 详解'
+date: '2026-07-08'
+tags:
+  - IREE
+  - 编译器
+  - MLIR
+  - Pass
+  - Dialect
+  - 编译原理
+  - 编译器后端
+  - 编译优化
+draft: false
+summary: '**Dialect 名称**: `stream` **C++ 命名空间**: `::mlir::iree_compiler::IREE::Stream` **主要用途**: 建模执行分区和异步调度 --- 1. [概述](#1-概述) 2. [文件结构](#2-文件结构) 3....'
+---
+
+
+**Dialect 名称**: `stream`
+**C++ 命名空间**: `::mlir::iree_compiler::IREE::Stream`
+**主要用途**: 建模执行分区和异步调度
+
+---
+
+## 目录
+
+1. [概述](#1-概述)
+2. [文件结构](#2-文件结构)
+3. [核心概念](#3-核心概念)
+4. [类型系统](#4-类型系统)
+5. [核心 Op 列表](#5-核心-op-列表)
+6. [关键 Interface](#6-关键-interface)
+7. [在编译 Pipeline 中的位置](#7-在编译-pipeline-中的位置)
+
+---
+
+## 1. 概述
+
+Stream Dialect 位于 Flow Dialect 和 HAL Dialect 之间，负责**将张量程序转换为显式调度的异步程序**。
+
+```
++--------+    +----------+    +-------+
+| flow.* | -> | stream.* | -> | hal.* |
++--------+    +----------+    +-------+
+```
+
+### 各 Dialect 的角色
+
+| Dialect | 职责 |
+|---|---|
+| **flow** | 通过将工作分离为 dispatchable 函数来建模张量程序，隔离主机程序数据流和稠密张量计算操作 |
+| **stream** | 通过分区可分发工作、指定目标亲和性、将张量编码为目标特定形式、调度工作并发运行，来建模显式调度的异步程序 |
+| **hal** | 建模低级硬件抽象层，用于管理缓冲区和在各种设备类型上发出异步工作，与 IREE HAL C API 大致 1:1 对应 |
+
+### 核心功能
+
+1. **目标放置** - 将 ops 放置在特定目标上
+2. **工作分区** - 在目标之间划分工作
+3. **并发调度** - 调度工作以并发执行
+4. **张量编码** - 将张量编码为目标特定资源
+
+### 降低流程
+
+Stream Dialect 的转换目标是**确保 IR 中没有张量存活**：
+
+1. **Tensor 阶段** - 使用 `stream.tensor.*` ops 捕获源张量编码信息（数据类型、形状等）
+2. **Async 阶段** - 降低为 `stream.async.*` ops，建模不透明资源上的异步工作负载
+3. **Cmd 阶段** - 异步操作被分区、分配、调度为 `stream.cmd.*` ops 执行
+
+### 抽象机器模型
+
+经过 Stream Dialect 转换后，程序应该**准备好在抽象机器上执行**：
+- 缓冲区尚未分配
+- 设备尚未解析
+- 但 IR 中捕获的信息允许这些操作轻松完成
+
+---
+
+## 2. 文件结构
+
+| 文件 | 内容 | 依赖 |
+|---|---|---|
+| `StreamDialect.td` | 核心 Dialect 定义 | 无 |
+| `StreamBase.td` | 基础类（Op、Type、Attr、Interface）、通用类型别名、Op Trait | StreamDialect.td |
+| `StreamAttrs.td` | 所有 Dialect 特定的 Attribute 定义 | StreamBase.td |
+| `StreamInterfaces.td` | 所有 Dialect 特定的 Interface 定义 | StreamBase.td、StreamAttrs.td |
+| `StreamTypes.td` | 所有 Dialect 特定的 Type 定义 | StreamBase.td、StreamInterfaces.td |
+| `StreamOps.td` | 所有 Dialect 特定的 Operation 定义 | StreamBase.td、StreamInterfaces.td、StreamTypes.td |
+
+---
+
+## 3. 核心概念
+
+### 3.1 Resource（资源）类型
+
+Stream Dialect 使用 `!stream.resource` 类型来表示**异步可用且有序的值**。所有操作都携带它们操作的资源的符号大小以及生命周期信息。
+
+**生命周期（Lifetime）分类**:
+
+| 类型 | MLIR 语法 | 说明 |
+|---|---|---|
+| `Unknown` | `!stream.resource<*>` | 未解析的生命周期（在 `iree-stream-refine-usage` pass 期间解析） |
+| `External` | `!stream.resource<external>` | 外部管理的值（通过程序 API 传入） |
+| `Staging` | `!stream.resource<staging>` | 用于上传/下载的暂存缓冲区 |
+| `Transient` | `!stream.resource<transient>` | 跨流使用的短期值 |
+| `Variable` | `!stream.resource<variable>` | 在全局变量中跨流持久化的长期值 |
+| `Constant` | `!stream.resource<constant>` | 在程序持续期间持久化的不可变值 |
+
+**Resource 大小示例**:
+
+```mlir
+// %update (40 bytes) 被插入到 %target (296 bytes)
+// 可以是动态值，例如来自动态维度的值
+%13 = stream.async.update %update, %target[%c256 to %c296] :
+    !stream.resource<transient>{%c40} ->
+    %target as !stream.resource<transient>{%c296}
+```
+
+### 3.2 Timepoint（时间点）
+
+Timepoint 代表执行时间线中的一个点，当该时间点被解析时，表示：
+- 该时间点之前的所有执行已完成
+- 执行产生的所有结果已可用（包括传递依赖）
+
+**关键特性**:
+- 如果时间点 B 依赖于时间点 A，则当 B 可用时，A 也必须可用
+- 时间点建立后，可以在不破坏执行正确性的情况下诱导资源别名
+- 在相应的时间点到达之前尝试使用资源会导致未定义行为
+
+---
+
+## 4. 类型系统
+
+### 4.1 同步类型
+
+| 类型名 | 说明 |
+|---|---|
+| `Stream_Timepoint` | 表示执行可用性的时间点。当其被解析时，表示该时间点之前的所有执行已完成且结果可用 |
+| `Stream_TestFence` | 仅用于测试的 fence 类型，用于在不引入 HAL 依赖的情况下测试 TimelineAwareOpInterface |
+
+### 4.2 资源类型
+
+| 类型名 | 接口 | 说明 |
+|---|---|---|
+| `Stream_Resource` | `Stream_AffinityType`、`Util_ReferenceType`、`Util_SizeAwareType`、`Util_GlobalType`、`Util_InferTypeSize`、`Util_SubrangeType` | 受管资源。表示异步可用且有序的值，由外部代码拥有和管理 |
+| `Stream_Channel` | `Util_ReferenceType` | 集体通信通道。表示集体通信团中的单个参与者。同一程序中可以存在多个通道以支持部分操作或分层操作 |
+
+### 4.3 传输类型
+
+`Stream_TransferType` 包括：
+- `Stream_AnyResource` - 任意流兼容类型
+- `Stream_Tensor` - 张量类型
+- `Stream_PrimitiveType` - 原始类型
+
+---
+
+## 5. 核心 Op 列表
+
+### 5.1 Tensor 阶段 Op
+
+| Op 类别 | 主要 Op | 说明 |
+|---|---|---|
+| **张量操作** | `stream.tensor.*` | 捕获张量编码信息 |
+| **编码** | `stream.tensor.encode`、`stream.tensor.import` | 张量编码/导入 |
+| **常量** | `stream.tensor.splat`、`stream.tensor.constant` | 张量常量操作 |
+
+### 5.2 Async 阶段 Op
+
+| Op 类别 | 主要 Op | 说明 |
+|---|---|---|
+| **执行区域** | `stream.async.execute` | 异步执行区域 |
+| **分配/释放** | `stream.async.alloc`、`stream.async.dealloc` | 异步内存管理 |
+| **传输** | `stream.async.transfer` | 异步数据传输 |
+| **填充/更新** | `stream.async.fill`、`stream.async.update` | 异步填充和更新 |
+| **集体通信** | `stream.async.all.reduce`、`stream.async.all.gather` | 异步集体操作 |
+| **分发** | `stream.async.dispatch` | 异步 dispatch 执行 |
+
+### 5.3 Cmd 阶段 Op
+
+| Op 类别 | 主要 Op | 说明 |
+|---|---|---|
+| **命令序列** | `stream.cmd.series` | 命令序列（顺序执行） |
+| **并发执行** | `stream.cmd.concurrent` | 并发执行区域 |
+| **分发** | `stream.cmd.dispatch` | 命令级 dispatch |
+| **缓冲区操作** | `stream.cmd.copy`、`stream.cmd.fill` | 缓冲区操作 |
+| **集体通信** | `stream.cmd.all.*` | 命令级集体操作 |
+| **屏障** | `stream.cmd.barrier` | 执行屏障 |
+
+### 5.4 通道操作
+
+| Op 名称 | 说明 |
+|---|---|
+| `stream.channel.default` | 默认通道 |
+| `stream.channel.rank` | 获取通道 rank |
+| `stream.channel.count` | 获取通道数量 |
+
+---
+
+## 6. 关键 Interface
+
+### 6.1 Stream_AffinityType
+
+具有亲和性属性的类型接口，用于跟踪资源所属的目标设备。
+
+### 6.2 Stream_TimelineAwareOpInterface
+
+时间线感知操作接口，用于操作需要按时间顺序执行的 ops。
+
+### 6.3 Util_GlobalType
+
+全局类型接口，标记可以作为全局变量存储的类型。
+
+### 6.4 Util_ReferenceType
+
+引用类型接口，表示需要引用计数的类型。
+
+### 6.5 Util_SizeAwareType
+
+大小感知类型接口，可以追踪资源的字节大小。
+
+### 6.6 Util_InferTypeSize
+
+类型大小推断接口，可以从值中推断资源的大小。
+
+### 6.7 Util_SubrangeType
+
+子范围类型接口，支持创建资源的子范围操作。
+
+---
+
+## 7. 在编译 Pipeline 中的位置
+
+Stream Dialect 位于编译 Pipeline 的**中后阶段**，是连接高层张量程序和底层硬件抽象的关键桥梁：
+
+```
+Input → GlobalOptimization → DispatchCreation → Flow → **STREAM** → HAL → VM
+```
+
+### Stream Pipeline 的三个阶段
+
+#### 阶段 1: Tensor → Async
+
+**Pass 顺序**:
+
+| 顺序 | Pass 名称 | 说明 |
+|---|---|---|
+| 1 | `CloneToConsumersPass` | 克隆到消费者 |
+| 2 | `AnnotateAffinitiesPass` | 注解亲和性 |
+| 3 | `ConvertToStreamPass` | 转换为 Stream Dialect |
+| 4 | `VerifyLoweringToTensorsPass` | 验证 Tensor 降低 |
+
+**目标**: 将张量值转换为带编码信息的不透明资源
+
+#### 阶段 2: Async → Async（优化）
+
+**Pass 顺序**:
+
+| 顺序 | Pass 名称 | 说明 |
+|---|---|---|
+| 1 | `SpecializeEncodingsPass` | 特化编码 |
+| 2 | `EncodeHostTensorsPass` / `EncodeDeviceTensorsPass` | 编码主机/设备张量 |
+| 3 | `MaterializeEncodingsPass` | 具体化编码 |
+| 4 | `LayoutSlicesPass` | 布局切片 |
+| 5 | `ScheduleExecutionPass` / `ScheduleConcurrencyPass` | 调度执行/并发 |
+| 6 | `MaterializeBuiltinsPass` | 具体化内建函数 |
+| 7 | `VerifyLoweringToAsyncPass` | 验证 Async 降低 |
+
+**目标**: 优化异步执行计划，确定执行顺序和并发
+
+#### 阶段 3: Async → Cmd
+
+**Pass 顺序**:
+
+| 顺序 | Pass 名称 | 说明 |
+|---|---|---|
+| 1 | `ScheduleAllocationPass` | 调度分配 |
+| 2 | `EmplaceTransientsPass` | 安置瞬态资源 |
+| 3 | `PackConstantsPass` | 打包常量 |
+| 4 | `AutomaticReferenceCountingPass` | 自动引用计数 |
+| 5 | `VerifyLoweringToCmdPass` | 验证 Cmd 降低 |
+
+**目标**: 生成最终的命令序列，准备交给 HAL Dialect
+
+### 关键优化策略
+
+1. **资源重用** - `ReuseAllocationsPass` - 重用生命周期不重叠的资源
+2. **绑定融合** - `FuseDispatchBindingsPass` - 融合 dispatch 绑定操作
+3. **操作数折叠** - `FoldUniformOperandsPass` - 折叠统一操作数
+4. **时间点传播** - `PropagateTimepointsPass` - 传播时间点依赖
+5. **自动引用计数** - 管理资源生命周期
+
+---
+
+## 总结
+
+Stream Dialect 是 IREE 编译器的**调度核心**：
+
+- ✅ 连接 Flow（张量程序）和 HAL（硬件抽象）
+- ✅ 将值语义张量转换为不透明的带生命周期资源
+- ✅ 建模显式异步执行和时间点依赖
+- ✅ 支持多种资源生命周期（External、Staging、Transient、Variable、Constant）
+- ✅ 分三阶段降低：Tensor → Async → Cmd
+- ✅ 执行关键优化：资源重用、并发调度、内存分配规划
+
+Stream Dialect 的设计使得 IREE 能够：
+1. 高效地管理跨设备异步执行
+2. 优化内存分配和重用
+3. 支持复杂的执行依赖关系
+4. 为多种硬件后端提供统一的调度模型

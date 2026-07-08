@@ -1,0 +1,180 @@
+---
+title: 'TensorExt Dialect 详解'
+date: '2026-07-08'
+tags:
+  - IREE
+  - 编译器
+  - MLIR
+  - Dialect
+  - 编译原理
+draft: false
+summary: '**Dialect 名称**: `iree_tensor_ext` **C++ 命名空间**: `::mlir::iree_compiler::IREE::TensorExt` **主要用途**: Tensor 方言实验性扩展（超出标准 Tensor Dialect 的张量操作） --- 1....'
+---
+
+
+**Dialect 名称**: `iree_tensor_ext`
+**C++ 命名空间**: `::mlir::iree_compiler::IREE::TensorExt`
+**主要用途**: Tensor 方言实验性扩展（超出标准 Tensor Dialect 的张量操作）
+
+---
+
+## 目录
+
+1. [概述](#1-概述)
+2. [核心概念](#2-核心概念)
+3. [类型系统](#3-类型系统)
+4. [核心 Op 列表](#4-核心-op-列表)
+5. [在编译 Pipeline 中的位置](#5-在编译-pipeline-中的位置)
+
+---
+
+## 1. 概述
+
+TensorExt (Tensor Extensions) Dialect 用于**试验标准 Tensor Dialect 目前尚未提供的张量操作**。
+
+### 设计定位
+
+TensorExt 是 IREE 的**张量操作试验场**，类似于 LinalgExt 对 Linalg 的扩展：
+- 试验新的张量操作表示
+- 填补标准 Tensor Dialect 的空白
+- 成熟后可能向上游 MLIR 贡献
+
+### 依赖关系
+
+TensorExt 依赖 `arith::ArithDialect` 用于 `materializeConstant()` 功能。
+
+---
+
+## 2. 核心概念
+
+### 2.1 Dispatch Tensor（分发张量）
+
+Dispatch Tensor 是 TensorExt 的核心抽象，代表 **dispatch 区域输入/输出操作数的占位符**。
+
+**用途**:
+- 查询张量元数据（如形状）
+- 从后备张量表示加载
+- 存储到后备张量表示
+
+### 2.2 访问权限模型
+
+TensorAccess 定义了三种访问权限：
+
+| 访问权限 | 可读 | 可写 | 典型用途 |
+|---|---|---|---|
+| `ReadOnly` | ✓ | ✗ | 输入张量 |
+| `WriteOnly` | ✗ | ✓ | 输出张量 |
+| `ReadWrite` | ✓ | ✓ | 输入输出张量 |
+
+这些权限在类型系统中强制执行，确保正确的访问模式。
+
+---
+
+## 3. 类型系统
+
+### 3.1 基本类型别名
+
+| 类型名 | 别名 | 说明 |
+|---|---|---|
+| `IREETensorExt_Dim` | `Index` | 维度类型 |
+| `IREETensorExt_ShapeDynamicDims` | `Variadic<Index>` | 形状动态维度（可变参数） |
+
+### 3.2 Dispatch Tensor 类型
+
+| 类型名 | 访问权限 | 说明 |
+|---|---|---|
+| `IREETensorExt_DispatchTensor` | 不限 | 通用 dispatch 张量占位符 |
+| `IREETensorExt_ReadableDispatchTensor` | ReadOnly \| ReadWrite | 可读 dispatch 张量（输入操作数） |
+| `IREETensorExt_WritableDispatchTensor` | WriteOnly \| ReadWrite | 可写 dispatch 张量（输出操作数） |
+
+### 3.3 DispatchTensorType 详解
+
+**MLIR 语法**: `!iree_tensor_ext.dispatch.tensor`
+
+**功能**:
+1. **元数据查询** - 获取形状、类型等信息
+2. **加载操作** - 从后备表示读取（需要读权限）
+3. **存储操作** - 写入后备表示（需要写权限）
+
+**使用场景**:
+- 在 dispatch region 形成期间使用
+- 表示尚未具体化的张量边界
+- 启用形状和访问权限的编译时检查
+
+---
+
+## 4. 核心 Op 列表
+
+### 4.1 Dispatch Tensor 操作
+
+| Op 名称 | 说明 |
+|---|---|
+| `iree_tensor_ext.dispatch.tensor.load` | 从 dispatch tensor 加载值 |
+| `iree_tensor_ext.dispatch.tensor.store` | 存储值到 dispatch tensor |
+| `iree_tensor_ext.dispatch.tensor.shape` | 获取 dispatch tensor 形状 |
+| `iree_tensor_ext.dispatch.tensor.cast` | 转换 dispatch tensor 访问权限 |
+
+### 4.2 稀疏张量操作
+
+| Op 名称 | 说明 |
+|---|---|
+| `iree_tensor_ext.sparse.alloc` | 分配稀疏张量 |
+| `iree_tensor_ext.sparse.dealloc` | 释放稀疏张量 |
+| `iree_tensor_ext.sparse.convert` | 转换稀疏张量格式 |
+| `iree_tensor_ext.sparse.load` | 加载稀疏张量值 |
+| `iree_tensor_ext.sparse.store` | 存储稀疏张量值 |
+| `iree_tensor_ext.sparse.to_dense` | 稀疏张量转稠密张量 |
+| `iree_tensor_ext.sparse.from_dense` | 稠密张量转稀疏张量 |
+
+### 4.3 测试和调试
+
+| Op 名称 | 说明 |
+|---|---|
+| `iree_tensor_ext.test_sparse_op_interface_methods` | 测试稀疏操作接口方法 |
+
+---
+
+## 5. 在编译 Pipeline 中的位置
+
+TensorExt Dialect 主要在 **DispatchCreation 阶段** 使用：
+
+```
+GlobalOptimization → DispatchCreation → Flow
+                           ↑
+                    TensorExt ops
+```
+
+### 典型使用时序
+
+| 阶段 | 操作 |
+|---|---|
+| **Dispatch 区域形成** | 使用 DispatchTensor 作为输入输出占位符 |
+| **Dispatch 区域内** | 通过 `dispatch.tensor.load/store` 访问 |
+| **Dispatch 区域 Outline** | DispatchTensor 被替换为实际张量 |
+
+### 与其他 Dialect 的交互
+
+| Dialect | 交互方式 |
+|---|---|
+| **Linalg** | Dispatch 区域内的 Linalg ops 通过 TensorExt 访问输入输出 |
+| **Flow** | DispatchTensor 最终降低为 Flow 张量类型 |
+| **Stream** | TensorExt 操作在 Stream 级别之前被完全降低 |
+
+---
+
+## 总结
+
+TensorExt Dialect 是 IREE 的**张量操作扩展平台**：
+
+- ✅ 试验标准 Tensor Dialect 之外的张量操作
+- ✅ 核心类型：DispatchTensor（带访问权限）
+- ✅ 三种访问权限：ReadOnly、WriteOnly、ReadWrite
+- ✅ 主要在 DispatchCreation 阶段使用
+- ✅ 支持稀疏张量操作
+- ✅ 提供编译时访问权限检查
+
+TensorExt 的关键作用：
+1. 为 dispatch 区域提供类型安全的边界抽象
+2. 试验稀疏张量等高级张量操作
+3. 作为新功能的试验场
+4. 补充标准 Tensor Dialect 的不足

@@ -1,0 +1,310 @@
+---
+title: 'Encoding Dialect 详解'
+date: '2026-07-08'
+tags:
+  - IREE
+  - 编译器
+  - MLIR
+  - Pass
+  - Dialect
+  - 编译原理
+  - 编译器后端
+  - 编译优化
+  - CPU
+  - GPU
+  - Vulkan
+draft: false
+summary: '**Dialect 名称**: `iree_encoding` **C++ 命名空间**: `::mlir::iree_compiler::IREE::Encoding` **主要用途**: 张量编码属性和相关操作（数据分块/布局优化） --- 1. [概述](#1-概述) 2....'
+---
+
+
+**Dialect 名称**: `iree_encoding`
+**C++ 命名空间**: `::mlir::iree_compiler::IREE::Encoding`
+**主要用途**: 张量编码属性和相关操作（数据分块/布局优化）
+
+---
+
+## 目录
+
+1. [概述](#1-概述)
+2. [核心概念](#2-核心概念)
+3. [编码三阶段转换](#3-编码三阶段转换)
+4. [关键 Interface](#4-关键-interface)
+5. [核心 Op 列表](#5-核心-op-列表)
+6. [编码属性](#6-编码属性)
+7. [在编译 Pipeline 中的位置](#7-在编译-pipeline-中的位置)
+
+---
+
+## 1. 概述
+
+Encoding Dialect 定义了 IREE 的**张量编码属性和相关操作**。这些编码提示启用了计算密集型操作（如矩阵乘法）的优化。
+
+### 设计目标
+
+1. **数据分块优化** - 通过编码实现数据布局优化
+2. **生产者-消费者融合** - 将编码操作与生产者融合
+3. **后端特定优化** - 支持不同后端的自定义编码策略
+4. **延迟具体化** - 将编码决策延迟到有足够目标信息时
+
+### 核心操作
+
+Encoding Dialect 只有两个核心操作，非常简单：
+
+| Op 名称 | 作用 |
+|---|---|
+| `SetEncodingOp` | 为张量值添加编码属性 |
+| `UnsetEncodingOp` | 从张量值移除编码属性 |
+
+### 编码属性分类
+
+编码属性分为两类：
+
+| 类别 | 说明 |
+|---|---|
+| **编码类型属性** | 附加在张量类型上的属性 |
+| **编码解析器（Resolver）** | 负责在状态之间转换编码 |
+
+---
+
+## 2. 核心概念
+
+### 2.1 编码与数据分块
+
+IREE 使用 Encoding Dialect 实现**数据分块（Data Tiling）**：
+
+1. 在 matmul 等操作上引入编码
+2. 将编码操作与生产者融合
+3. 在后端应用特定的布局优化
+
+**好处**:
+- 提高缓存局部性
+- 启用向量化
+- 减少内存访问
+- 支持后端特定优化
+
+### 2.2 编码解析器（Resolver）
+
+编码解析器是后端特定的组件，负责：
+- 解释编码的含义
+- 转换编码状态
+- 生成物理操作和类型
+
+**命名约定**: 编码解析器通常以 `_resolver` 后缀命名。
+
+---
+
+## 3. 编码三阶段转换
+
+编码属性经历三个状态的转换：
+
+```
++------------------+    +---------------------+    +--------------------+
+| Verbose Encoding | -> | Serialized Encoding | -> | Physical Ops/Types |
++------------------+    +---------------------+    +--------------------+
+```
+
+### 3.1 阶段 1: Verbose Encoding（详细编码）
+
+**特点**:
+- 高级、与目标无关的编码描述
+- 包含用户意图和优化提示
+- 不包含目标特定细节
+
+**示例**:
+```mlir
+// 表示 matmul 应该使用特定的分块策略
+tensor<1024x1024xf32, #encoding.matmul_MxNxK_128x128x32>
+```
+
+**位置**: 出现在 GlobalOptimization 和 DispatchCreation 阶段
+
+### 3.2 阶段 2: Serialized Encoding（序列化编码）
+
+**特点**:
+- 包含足够细节供主机端编译使用
+- 可能包含自定义格式（如打包）
+- 已经过目标特定信息处理
+
+**转换时机**: 在 Stream Dialect 的 `SpecializeEncoding` pass 期间发生
+- 此时可以访问所有必要的上下文（如亲和性）
+- 桥接主机和设备编译
+- 允许基于序列化编码结果专门化存储大小
+
+### 3.3 阶段 3: Physical Ops/Types（物理操作/类型）
+
+**特点**:
+- 实际的低级操作和类型
+- 包含具体的内存布局
+- 可以直接由后端处理
+
+---
+
+## 4. 关键 Interface
+
+Encoding Dialect 定义了三个关键接口来支持编码转换：
+
+### 4.1 LayoutResolverAttr
+
+**职责**: 将详细编码（Verbose Encoding）转换为序列化编码（Serialized Encoding）
+
+**工作方式**:
+- 基于目标特定信息
+- 在 Stream 级别调用（可以访问亲和性等上下文）
+- 每个后端可以定义自己的解析器
+
+### 4.2 SerializableAttr
+
+**职责**: 表示序列化编码格式
+
+**特点**:
+- 包含足够细节供主机端编译使用
+- 可以是自定义格式（如打包）
+- 只有解析器本身知道如何解释布局
+
+### 4.3 LayoutMaterializerAttr
+
+**职责**: 将编码降低为物理操作和类型
+
+**工作方式**:
+- 只有解析器本身知道最终操作和类型是什么
+- 生成实际的低级操作
+- 处理内存布局转换
+
+### 接口实现要求
+
+| 接口 | 所有解析器必须实现 | 可选 |
+|---|---|---|
+| LayoutResolverAttr | ✓ | - |
+| LayoutMaterializerAttr | ✓ | - |
+| SerializableAttr | - | ✓（当布局是自定义格式时） |
+
+---
+
+## 5. 核心 Op 列表
+
+### 5.1 编码设置/移除
+
+| Op 名称 | 说明 |
+|---|---|
+| `iree_encoding.set_encoding` | 为张量设置编码属性 |
+| `iree_encoding.unset_encoding` | 从张量移除编码属性 |
+
+### 5.2 编码传播
+
+| Op 名称 | 说明 |
+|---|---|
+| `iree_encoding.propagate` | 通过操作传播编码 |
+| `iree_encoding.fuse` | 将编码与生产者操作融合 |
+
+### 5.3 编码具体化
+
+| Op 名称 | 说明 |
+|---|---|
+| `iree_encoding.materialize` | 将编码具体化为实际操作 |
+| `iree_encoding.materialize_host` | 在主机端具体化编码 |
+| `iree_encoding.materialize_device` | 在设备端具体化编码 |
+
+### 5.4 分块相关
+
+| Op 名称 | 说明 |
+|---|---|
+| `iree_encoding.tile` | 应用分块编码 |
+| `iree_encoding.pack` | 应用打包编码 |
+| `iree_encoding.unpack` | 移除打包编码 |
+
+---
+
+## 6. 编码属性
+
+### 6.1 Matmul 编码
+
+| 属性名 | 说明 |
+|---|---|
+| `#encoding.matmul_MxNxK` | 标准 Matmul 分块编码 |
+| `#encoding.matmul_MxNxK_128x128x32` | 128x128x32 分块的 Matmul |
+| `#encoding.matmul_MxNxK_64x64x64` | 64x64x64 分块的 Matmul |
+
+### 6.2 卷积编码
+
+| 属性名 | 说明 |
+|---|---|
+| `#encoding.conv_NCHW` | NCHW 布局的卷积编码 |
+| `#encoding.conv_NHWC` | NHWC 布局的卷积编码 |
+| `#encoding.conv_depthwise` | 深度可分离卷积编码 |
+
+### 6.3 通用编码
+
+| 属性名 | 说明 |
+|---|---|
+| `#encoding.pack` | 通用打包编码 |
+| `#encoding.transpose` | 转置编码 |
+| `#encoding.splat` | Splat 常量编码 |
+
+### 6.4 后端特定编码
+
+| 属性名 | 说明 |
+|---|---|
+| `#encoding.cpu` | CPU 特定编码 |
+| `#encoding.gpu` | GPU 特定编码 |
+| `#encoding.vulkan` | Vulkan 特定编码 |
+
+---
+
+## 7. 在编译 Pipeline 中的位置
+
+Encoding Dialect 贯穿多个编译阶段：
+
+```
+Input → GlobalOptimization → DispatchCreation → Flow → Stream → HAL
+   ↑               ↑              ↑           ↑
+   SetEncoding     Propagate    Fuse        Specialize
+                   Encoding     Encoding    Encoding
+```
+
+### 关键 Pass 时序
+
+| 阶段 | Pass 名称 | 编码操作 |
+|---|---|---|
+| **GlobalOptimization** | `SetEncodingPass` | 设置初始编码（详细编码） |
+| **DispatchCreation** | `PropagateEncodingsPass` | 通过操作传播编码 |
+| **DispatchCreation** | `FuseEncodingOpsIntoDispatchRegionsPass` | 将编码操作融合到 dispatch 区域 |
+| **Stream** | `SpecializeEncodingsPass` | 专门化编码（详细 → 序列化） |
+| **Stream** | `MaterializeEncodingsPass` | 具体化编码（序列化 → 物理） |
+
+### SpecializeEncodingPass 详解
+
+**位置**: Stream Dialect 级别
+
+**为什么在 Stream 级别？**:
+- ✅ 可以访问设备亲和性信息
+- ✅ 桥接主机和设备编译
+- ✅ 基于序列化编码结果专门化存储大小
+- ✅ 有完整的程序上下文进行全局优化
+
+**工作流程**:
+1. 遍历所有带编码的张量
+2. 检索适当的编码解析器（基于目标后端）
+3. 调用解析器将详细编码转换为序列化编码
+4. 更新张量类型和相关操作
+
+---
+
+## 总结
+
+Encoding Dialect 是 IREE 的**数据布局优化核心**：
+
+- ✅ 定义张量编码属性和相关操作
+- 启用计算密集型操作的优化（如 matmul 数据分块）
+- 只有两个核心操作：`set_encoding` 和 `unset_encoding`
+- 三阶段转换：详细编码 → 序列化编码 → 物理操作/类型
+- 三个关键接口：LayoutResolverAttr、SerializableAttr、LayoutMaterializerAttr
+- 编码解析器命名约定：`_resolver` 后缀
+- 在 Stream 级别专门化编码（访问完整上下文）
+
+Encoding Dialect 使得 IREE 能够：
+1. 透明地应用高级数据布局优化
+2. 支持后端特定的编码策略
+3. 将编码决策延迟到有足够信息时
+4. 在不改变用户代码的情况下优化内核
+5. 实现生产者-消费者融合优化

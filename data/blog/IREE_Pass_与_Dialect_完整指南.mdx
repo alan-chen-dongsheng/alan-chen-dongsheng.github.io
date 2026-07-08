@@ -1,0 +1,635 @@
+---
+title: 'IREE Pass 与 Dialect 完整指南'
+date: '2026-07-08'
+tags:
+  - IREE
+  - 编译器
+  - MLIR
+  - Pass
+  - Dialect
+  - 编译原理
+  - 编译器后端
+  - 调试
+  - 编译优化
+  - LLVM
+  - CPU
+  - GPU
+  - Vulkan
+draft: false
+summary: '本文档记录了 IREE 编译器中所有自定义的 Dialect 和 Pass，包括它们的作用、作用对象以及在编译 Pipeline 中的顺序。 --- 1. [IREE 自有 Dialect 列表](#1-iree-自有-dialect-列表) 2. [Pass 总览](#2-pass-总览) 3....'
+---
+
+
+本文档记录了 IREE 编译器中所有自定义的 Dialect 和 Pass，包括它们的作用、作用对象以及在编译 Pipeline 中的顺序。
+
+---
+
+## 目录
+
+1. [IREE 自有 Dialect 列表](#1-iree-自有-dialect-列表)
+2. [Pass 总览](#2-pass-总览)
+3. [Pass 详细分类](#3-pass-详细分类)
+4. [编译 Pipeline 阶段与 Pass 顺序](#4-编译-pipeline-阶段与-pass-顺序)
+5. [关键源文件索引](#5-关键源文件索引)
+6. [Pass 命名与位置对应关系](#6-pass-命名与位置对应关系)
+
+---
+
+## 1. IREE 自有 Dialect 列表
+
+IREE 编译器共定义了 **19 个** 自定义 Dialect：
+
+| Dialect 名称 | 命名空间 | 定义文件 | 主要用途 |
+|---|---|---|---|
+| `util` | `IREE::Util` | `Dialect/Util/IR/UtilBase.td` | IREE 各子 dialect 通用的类型与工具 op |
+| `flow` | `IREE::Flow` | `Dialect/Flow/IR/FlowBase.td` | 建模执行数据流与分区（dispatch region） |
+| `stream` | `IREE::Stream` | `Dialect/Stream/IR/StreamDialect.td` | 显式异步调度执行，位于 flow 与 hal 之间 |
+| `hal` | `IREE::HAL` | `Dialect/HAL/IR/HALDialect.td` | 硬件抽象层（Vulkan-like，无图形部分） |
+| `vm` | `IREE::VM` | `Dialect/VM/IR/VMBase.td` | 抽象虚拟机，可序列化为字节码或继续 lower |
+| `vmvx` | `IREE::VMVX` | `Dialect/VMVX/IR/VMVXBase.td` | VM 向量扩展/微内核库方言 |
+| `iree_linalg_ext` | `IREE::LinalgExt` | `Dialect/LinalgExt/IR/LinalgExtBase.td` | Linalg 非结构化/实验性扩展 |
+| `iree_tensor_ext` | `IREE::TensorExt` | `Dialect/TensorExt/IR/TensorExtBase.td` | Tensor 方言实验性扩展 |
+| `iree_encoding` | `IREE::Encoding` | `Dialect/Encoding/IR/EncodingBase.td` | 张量编码属性与相关 op（data-tiling） |
+| `iree_codegen` | `IREE::Codegen` | `Codegen/Dialect/Codegen/IR/IREECodegenDialect.td` | 代码生成通用属性与状态 |
+| `iree_cpu` | `IREE::CPU` | `Codegen/Dialect/CPU/IR/IREECPUDialect.td` | CPU 代码生成专用属性/op |
+| `iree_gpu` | `IREE::GPU` | `Codegen/Dialect/GPU/IR/IREEGPUDialect.td` | GPU 代码生成专用属性/op |
+| `iree_map` | `IREE::Map` | `Codegen/Dialect/Map/IR/IREEMapBase.td` | 描述层次化坐标映射的 map 代数 |
+| `pcf` | `IREE::PCF` | `Codegen/Dialect/PCF/IR/PCFBase.td` | 并行控制流（Parallel Control Flow） |
+| `iree_vector_ext` | `IREE::VectorExt` | `Codegen/Dialect/VectorExt/IR/VectorExtBase.td` | Vector 方言实验性扩展 |
+| `hal_inline` | `IREE::HAL::Inline` | `Modules/HAL/Inline/IR/HALInlineBase.td` | 进程内同步 HAL 互操作运行时模块 |
+| `hal_loader` | `IREE::HAL::Loader` | `Modules/HAL/Loader/IR/HALLoaderBase.td` | 动态加载可执行文件并调度 |
+| `io_parameters` | `IREE::IO::Parameters` | `Modules/IO/Parameters/IR/IOParametersBase.td` | 外部参数资源管理 API |
+| `check` | `IREE::Check` | `Modules/Check/IR/CheckBase.td` | 测试断言 dialect |
+
+### Dialect 注册入口
+
+- **核心 Dialect**: `Tools/init_iree_dialects.h` - 注册前 18 个 Dialect
+- **模块 Dialect**: `Tools/init_compiler_modules.h` - 注册 `check`
+
+---
+
+## 2. Pass 总览
+
+IREE 编译器共定义了 **486 个** 自定义 Pass，按组件分类如下：
+
+| 组件 | Pass 数量 | 主要目录 |
+|---|---|---|
+| Codegen | 243 | `Codegen/Common/`, `Codegen/LLVMCPU/`, `Codegen/LLVMGPU/`, `Codegen/SPIRV/`, `Codegen/VMVX/` |
+| Dialect 转换 | 152 | `Dialect/{Flow,Stream,HAL,Util,VM,VMVX,LinalgExt,TensorExt}/Transforms/` |
+| DispatchCreation | 31 | `DispatchCreation/` |
+| GlobalOptimization | 22 | `GlobalOptimization/` |
+| Preprocessing | 15 | `Preprocessing/Common/` |
+| InputConversion | 9 | `InputConversion/Common/` |
+| Modules | 8 | `Modules/HAL/Inline/`, `Modules/HAL/Loader/`, `Modules/IO/Parameters/` |
+| Bindings | 3 | `Bindings/Native/`, `Bindings/TFLite/` |
+| Transforms | 2 | `Transforms/` |
+| ConstEval | 1 | `ConstEval/` |
+| **合计** | **486** | |
+
+---
+
+## 3. Pass 详细分类
+
+### 3.1 Bindings（3 个 Pass）
+
+| 命令行 Flag | Pass 类名 | 作用 Op | 描述 |
+|---|---|---|---|
+| `--iree-abi-convert-streamable-ops` | `ConvertStreamableOpsPass` | `ModuleOp` | 将输入 dialect 中可流式传输的 op 转换为 IREE dialect 形式 |
+| `--iree-abi-wrap-entry-points` | `WrapEntryPointsPass` | `ModuleOp` | 包装入口函数以兼容原生 IREE ABI |
+| `--iree-tflite-wrap-entry-points` | `WrapEntryPointsPass` | `ModuleOp` | 包装入口函数以兼容 IREE TFLite C 绑定 |
+
+### 3.2 Codegen / Common / CPU（3 个 Pass）
+
+| 命令行 Flag | Pass 类名 | 作用 Op | 描述 |
+|---|---|---|---|
+| `--iree-codegen-cpu-lower-to-ukernels` | `CPULowerToUKernelsPass` | - | 将 IR 中可映射到微内核的部分分离出来 |
+| `--iree-codegen-cpu-prepare-ukernels` | `CPUPrepareUkernelsPass` | `FunctionOpInterface` | 对 op 进行降维以适配现有 ukernel 要求 |
+| `--iree-codegen-cpu-propagate-data-layout` | `CPUPropagateDataLayoutPass` | `FunctionOpInterface` | 传播 pack/unpack/reshape 使整个 dispatch 数据布局一致 |
+
+### 3.3 Codegen / Common / GPU（43 个 Pass）
+
+| 命令行 Flag | Pass 类名 | 作用 Op | 描述 |
+|---|---|---|---|
+| `--iree-codegen-amdgpu-lower-async-dma` | `AMDGPULowerAsyncDMAPass` | `FunctionOpInterface` | 将 async_dma 降到 amdgpu.gather_to_lds |
+| `--iree-codegen-amdgpu-lower-coalesced-dma-to-gather-lds` | `AMDGPULowerCoalescedDMAToGatherLDSPass` | `FunctionOpInterface` | 将合并 DMA 降到 amdgpu.gather_to_lds |
+| `--iree-codegen-gpu-decompose-horizontally-fused-gemms` | `DecomposeHorizontallyFusedGemmsPass` | `FunctionOpInterface` | 分解水平融合的 GEMM |
+| `--iree-codegen-expand-gpu-ops` | `ExpandGPUOpsPass` | `FunctionOpInterface` | 展开高级 GPU op（如 clustered subgroup_reduce） |
+| `--iree-codegen-gpu-alloc-private-memory-for-dps-ops` | `GPUAllocPrivateMemoryForDPSOpsPass` | `FunctionOpInterface` | 在 DPS 接口 op 前添加私有内存分配 |
+| `--iree-codegen-gpu-apply-padding-level` | `GPUApplyPaddingLevelPass` | `FunctionOpInterface` | 按 tiling 配置填充 |
+| `--iree-codegen-gpu-apply-tiling-level` | `GPUApplyTilingLevelPass` | `FunctionOpInterface` | 按 tiling 配置对 tensor op 分块 |
+| `--iree-codegen-gpu-bubble-resource-casts` | `GPUBubbleResourceCastsPass` | - | 将 iree_gpu.buffer_resource_cast 向上冒泡 |
+| `--iree-codegen-gpu-check-resource-usage` | `GPUCheckResourceUsagePass` | `FunctionOpInterface` | 检查共享内存等 GPU 资源约束 |
+| `--iree-codegen-gpu-combine-layout-transformation` | `GPUCombineLayoutTransformationPass` | `FunctionOpInterface` | 合并布局转换到单个 map_store |
+| `--iree-codegen-gpu-combine-value-semantic-barriers` | `GPUCombineValueSemanticBarriersPass` | - | 合并 value_barrier 与 barrier_region |
+| `--iree-codegen-gpu-convert-to-coalesced-dma` | `GPUConvertToCoalescedDMAPass` | `FunctionOpInterface` | 转换为合并 DMA |
+| `--iree-codegen-gpu-create-fast-slow-path` | `GPUCreateFastSlowPathPass` | `FunctionOpInterface` | 创建快慢路径处理 padding |
+| `--iree-codegen-gpu-distribute-copy-using-forall` | `GPUDistributeCopyUsingForallPass` | `FunctionOpInterface` | 将 copy 分布到线程 |
+| `--iree-codegen-gpu-distribute-forall` | `GPUDistributeForallPass` | `FunctionOpInterface` | 分布 scf.forall |
+| `--iree-codegen-gpu-distribute` | `GPUDistributePass` | `FunctionOpInterface` | 使用上游模式分布 scf.forall |
+| `--iree-codegen-gpu-distribute-scf-for` | `GPUDistributeScfForPass` | `FunctionOpInterface` | 将分块循环分布到调用 |
+| `--iree-codegen-gpu-distribute-shared-memory-copy` | `GPUDistributeSharedMemoryCopyPass` | `FunctionOpInterface` | 将共享内存 copy 分布到线程 |
+| `--iree-codegen-gpu-fuse-and-hoist-parallel-loops` | `GPUFuseAndHoistParallelLoopsPass` | `FunctionOpInterface` | 贪婪融合并提升并行循环 |
+| `--iree-codegen-gpu-fuse-subgroup-consumers` | `GPUFuseSubgroupConsumersPass` | - | 将可 tile 消费者融合到 subgroup 级 pcf.generic |
+| `--iree-codegen-gpu-generalize-named-ops` | `GPUGeneralizeNamedOpsPass` | `FunctionOpInterface` | 将命名 Linalg op 转为 linalg.generic |
+| `--iree-codegen-gpu-greedily-distribute-to-threads` | `GPUGreedilyDistributeToThreadsPass` | `FunctionOpInterface` | 贪婪将剩余可 tile op 分布到线程 |
+| `--iree-codegen-gpu-infer-memory-space` | `GPUInferMemorySpacePass` | `FunctionOpInterface` | 推断并设置 alloc_tensor 内存空间 |
+| `--iree-codegen-gpu-multi-buffering` | `GPUMultiBufferingPass` | `FunctionOpInterface` | 软件多缓冲 |
+| `--iree-codegen-gpu-pack-partial-reductions` | `GPUPackPartialReductionsPass` | `FunctionOpInterface` | 将 reduction 维度拆分为 [outer, inner] |
+| `--iree-codegen-gpu-pack-to-intrinsics` | `GPUPackToIntrinsicsPass` | `FunctionOpInterface` | 打包类 matmul 并转为 iree_codegen.inner_tiled |
+| `--iree-codegen-gpu-pad-convs` | `GPUPadConvsPass` | `FunctionOpInterface` | 按配置填充卷积操作数 |
+| `--iree-codegen-gpu-pad-operands` | `GPUPadOperandsPass` | `FunctionOpInterface` | 按配置填充 op 操作数 |
+| `--iree-codegen-gpu-pipelining` | `GPUPipeliningPass` | `FunctionOpInterface` | 软件流水线 |
+| `--iree-codegen-gpu-promote-matmul-operands` | `GPUPromoteMatmulOperandsPass` | `FunctionOpInterface` | 插入不同 lower 配置的 copy |
+| `--iree-codegen-gpu-reduce-bank-conflicts` | `GPUReduceBankConflictsPass` | `FunctionOpInterface` | 通过 padding memref.alloc 减少 bank 冲突 |
+| `--iree-codegen-gpu-reuse-shared-memory-allocs` | `GPUReuseSharedMemoryAllocsPass` | `FunctionOpInterface` | 复用无重叠生命期的共享内存分配 |
+| `--iree-codegen-gpu-tensor-alloc` | `GPUTensorAllocPass` | `FunctionOpInterface` | 为某些 tensor 值创建分配 |
+| `--iree-codegen-gpu-tensor-tile` | `GPUTensorTilePass` | `FunctionOpInterface` | 在 GPU workgroup 内对 tensor (linalg) op 分块 |
+| `--iree-codegen-gpu-tensor-tile-to-serial-loops` | `GPUTensorTileToSerialLoopsPass` | `FunctionOpInterface` | 对某些 GPU op 的 reduction 维度分块 |
+| `--iree-codegen-gpu-tile-and-convert-conv-to-matmul` | `GPUTileAndConvertConvToMatmulPass` | `FunctionOpInterface` | 通过 tiling 将卷积转为 matmul |
+| `--iree-codegen-gpu-tile` | `GPUTilePass` | `FunctionOpInterface` | 将 tensor 语义 Linalg op tile 到调用 |
+| `--iree-codegen-gpu-tile-reduction` | `GPUTileReductionPass` | `FunctionOpInterface` | 对 linalg reduction 维度分块 |
+| `--iree-codegen-gpu-vector-alloc` | `GPUVectorAllocPass` | `FunctionOpInterface` | 为 contraction 输入创建分配 |
+| `--iree-codegen-gpu-verify-distribution` | `GPUVerifyDistributionPass` | `FunctionOpInterface` | 在解析分布式上下文前验证写操作 |
+| `--iree-codegen-reorder-workgroups` | `ReorderWorkgroupsPass` | `FunctionOpInterface` | 重排 workgroup id 改善缓存复用 |
+| `--iree-codegen-test-gpu-promotion-analysis` | `TestGPUPromotionAnalysisPass` | `FunctionOpInterface` | 测试 GPU promotion 类型反向分析 |
+| `--iree-codegen-vector-reduction-to-gpu` | `VectorReductionToGPUPass` | `FunctionOpInterface` | 将 vector reduction 转为 GPU op |
+
+### 3.4 Codegen / Common（关键 Pass）
+
+| 命令行 Flag | Pass 类名 | 作用 Op | 描述 |
+|---|---|---|---|
+| `--iree-codegen-tile-and-distribute-to-workgroups-using-forall-op` | `TileAndDistributeToWorkgroupsUsingForallOpPass` | `FunctionOpInterface` | 使用 scf.forall 将 op tile 并分布到 workgroup |
+| `--iree-codegen-iree-comprehensive-bufferize` | `IREEComprehensiveBufferizePass` | `FunctionOpInterface` | 将 tensor Linalg op 全面 bufferize |
+| `--iree-codegen-generic-vectorization` | `GenericVectorizationPass` | `FunctionOpInterface` | 对 tensor/linalg op 做向量化 |
+| `--iree-codegen-materialize-user-configs` | `MaterializeUserConfigsPass` | `ModuleOp` | 从用户配置设置 lowering config 与 translation info |
+| `--iree-codegen-materialize-tuning-specs` | `MaterializeTuningSpecsPass` | `ModuleOp` | 加载 tuning spec transform dialect 库 |
+| `--iree-codegen-link-tuning-specs` | `LinkTuningSpecsPass` | `ModuleOp` | 链接嵌套 tuning spec named sequence |
+| `--iree-codegen-lower-executable-using-transform-dialect` | `LowerExecutableUsingTransformDialectPass` | `ModuleOp` | 用模块内 transform dialect 配方 lower executable |
+| `--iree-transform-dialect-interpreter` | `TransformDialectInterpreterPass` | - | 应用 transform dialect 操作 |
+| `--iree-transform-dialect-drop-schedule` | `DropSchedulePass` | - | 删除 op 上的 schedule |
+| `--iree-codegen-lower-ukernel-ops-to-calls` | `LowerUKernelOpsToCallsPass` | `ModuleOp` | 将微内核包装 op 降为函数调用 |
+
+### 3.5 Codegen / Dialect / GPU（5 个 Pass）
+
+| 命令行 Flag | Pass 类名 | 作用 Op | 描述 |
+|---|---|---|---|
+| `--iree-gpu-convert-forall-to-generic-nest` | `ConvertForallToGenericNestGPUPass` | `FunctionOpInterface` | 将 GPU 映射的 scf.forall 转为 pcf.generic |
+| `--iree-gpu-distribute-inner-tiled-to-lanes` | `DistributeInnerTiledToLanesPass` | `FunctionOpInterface` | 将 inner_tiled op 分布到 lane |
+| `--iree-gpu-expand-undistributed-inner-tiles` | `ExpandUndistributedInnerTilesPass` | `FunctionOpInterface` | 扩展 inner_tiled op 内维以匹配线程布局 |
+| `--iree-gpu-lower-ops` | `LowerIREEGPUOpsPass` | `FunctionOpInterface` | bufferization 后 iree_gpu op 的 lower |
+| `--iree-gpu-unroll-to-intrinsics` | `UnrollToIntrinsicsPass` | `FunctionOpInterface` | 将 iree_gpu.multi_mma unroll 到内取向量大小 |
+
+### 3.6 Codegen / LLVMCPU（24 个 Pass）
+
+| 命令行 Flag | Pass 类名 | 作用 Op | 描述 |
+|---|---|---|---|
+| `--iree-convert-to-llvm` | `ConvertToLLVMPass` | `ModuleOp` | 最终降到 LLVMIR dialect |
+| `--iree-llvmcpu-select-lowering-strategy` | `LLVMCPUSelectLoweringStrategyPass` | `ModuleOp` | 选择 lowering pipeline attribute |
+| `--iree-llvmcpu-lower-executable-target` | `LLVMCPULowerExecutableTargetPass` | `FunctionOpInterface` | LLVMCPU 可执行目标 lower |
+| `--iree-llvmcpu-tile` | `LLVMCPUTilePass` | - | LLVMCPU tiling |
+| `--iree-llvmcpu-tile-to-vector-size` | `LLVMCPUTileToVectorSizePass` | - | Tile 到向量大小 |
+| `--iree-llvmcpu-peel` | `LLVMCPUPeelPass` | - | Loop peeling |
+| `--iree-llvmcpu-split-reduction` | `LLVMCPUSplitReductionPass` | - | 拆分 reduction |
+| `--iree-llvmcpu-vector-virtual-lowering` | `LLVMCPUVectorVirtualLoweringPass` | - | 向量虚拟 lowering |
+| `--iree-llvmcpu-vector-transpose-lowering` | `LLVMCPUVectorTransposeLoweringPass` | - | 向量转置 lowering |
+| `--iree-llvmcpu-vector-shape-cast-lowering` | `LLVMCPUVectorShapeCastLoweringPass` | - | 向量 shape cast lowering |
+| `--iree-llvmcpu-assign-constant-ordinals` | `LLVMCPUAssignConstantOrdinalsPass` | `ModuleOp` | 分配常量序号 |
+| `--iree-llvmcpu-assign-import-ordinals` | `LLVMCPUAssignImportOrdinalsPass` | `ModuleOp` | 分配导入序号 |
+| `--iree-llvmcpu-link-executables` | `LLVMCPULinkExecutablesPass` | `ModuleOp` | 链接可执行文件 |
+
+### 3.7 Codegen / LLVMGPU（24 个 Pass）+ ROCDL（4 个 Pass）
+
+| 命令行 Flag | Pass 类名 | 作用 Op | 描述 |
+|---|---|---|---|
+| `--iree-convert-to-nvvm` | `ConvertToNVVMPass` | `ModuleOp` | 最终降到 NVVM |
+| `--iree-convert-to-rocdl` | `ConvertToROCDLPass` | `ModuleOp` | 最终降到 ROCDL |
+| `--iree-llvmgpu-select-lowering-strategy` | `LLVMGPUSelectLoweringStrategyPass` | `ModuleOp` | 选择 LLVMGPU lowering 策略 |
+| `--iree-llvmgpu-lower-executable-target` | `LLVMGPULowerExecutableTargetPass` | `FunctionOpInterface` | LLVMGPU 可执行目标 lower |
+| `--iree-llvmgpu-tile-and-distribute` | `LLVMGPUTileAndDistributePass` | - | Tile 并分布 |
+| `--iree-llvmgpu-tensor-core-vectorization` | `LLVMGPUTensorCoreVectorizationPass` | - | Tensor Core 向量化 |
+| `--iree-llvmgpu-vector-distribute` | `LLVMGPUVectorDistributePass` | - | 向量分布 |
+| `--iree-llvmgpu-vector-lowering` | `LLVMGPUVectorLoweringPass` | - | 向量 lowering |
+| `--iree-llvmgpu-vector-flattening` | `LLVMGPUVectorFlatteningPass` | - | 向量扁平化 |
+| `--iree-llvmgpu-vector-to-gpu` | `LLVMGPUVectorToGPUPass` | - | 向量到 GPU op 转换 |
+
+### 3.8 Codegen / SPIRV（16 个 Pass）
+
+| 命令行 Flag | Pass 类名 | 作用 Op | 描述 |
+|---|---|---|---|
+| `--iree-convert-to-spirv` | `ConvertToSPIRVPass` | `ModuleOp` | 最终转到 SPIR-V dialect |
+| `--iree-spirv-select-lowering-strategy` | `SPIRVSelectLoweringStrategyPass` | `ModuleOp` | 选择 SPIR-V lowering 策略 |
+| `--iree-spirv-lower-executable-target` | `SPIRVLowerExecutableTargetPass` | `FunctionOpInterface` | SPIR-V 可执行目标 lower |
+| `--iree-spirv-tile-and-distribute` | `SPIRVTileAndDistributePass` | - | Tile 并分布 |
+| `--iree-spirv-tile-and-promote` | `SPIRVTileAndPromotePass` | - | Tile 并提升 |
+| `--iree-spirv-tile-to-cooperative-ops` | `SPIRVTileToCooperativeOpsPass` | - | Tile 到协作操作 |
+| `--iree-spirv-link-executables` | `SPIRVLinkExecutablesPass` | `ModuleOp` | 链接 SPIR-V 可执行文件 |
+
+### 3.9 Codegen / VMVX（5 个 Pass）
+
+| 命令行 Flag | Pass 类名 | 作用 Op | 描述 |
+|---|---|---|---|
+| `--iree-vmvx-select-lowering-strategy` | `VMVXSelectLoweringStrategyPass` | `ModuleOp` | 选择 VMVX lowering 策略 |
+| `--iree-vmvx-lower-executable-target` | `VMVXLowerExecutableTargetPass` | `FunctionOpInterface` | VMVX 可执行目标 lower |
+| `--iree-vmvx-lower-linalg-microkernels` | `VMVXLowerLinalgMicrokernelsPass` | - | 降低 Linalg 微内核 |
+| `--iree-vmvx-assign-constant-ordinals` | `VMVXAssignConstantOrdinalsPass` | `ModuleOp` | 分配常量序号 |
+| `--iree-vmvx-link-executables` | `VMVXLinkExecutablesPass` | `ModuleOp` | 链接 VMVX 可执行文件 |
+
+### 3.10 ConstEval（1 个 Pass）
+
+| 命令行 Flag | Pass 类名 | 作用 Op | 描述 |
+|---|---|---|---|
+| `--iree-consteval-jit-globals` | `JitGlobalsPass` | `ModuleOp` | JIT 求值全局初始化器 |
+
+### 3.11 Dialect / Flow（19 个 Pass）
+
+| 命令行 Flag | Pass 类名 | 作用 Op | 描述 |
+|---|---|---|---|
+| `--iree-verify-input-legality` | `VerifyInputLegalityPass` | - | 验证输入合法性 |
+| `--iree-flow-initialize-empty-tensors` | `InitializeEmptyTensorsPass` | - | 初始化空张量 |
+| `--iree-flow-capture-dynamic-dims` | `CaptureDynamicDimsPass` | - | 捕获动态维度 |
+| `--iree-flow-canonicalize` | `CanonicalizePass` | - | Flow dialect 规范化 |
+| `--iree-flow-outline-dispatch-externs` | `OutlineDispatchExternsPass` | - | 提取外部 dispatch |
+| `--iree-flow-outline-dispatch-regions` | `OutlineDispatchRegionsPass` | - | 提取 dispatch 区域 |
+| `--iree-flow-annotate-dispatches` | `AnnotateDispatchesPass` | - | 注解 dispatch 的执行信息 |
+| `--iree-flow-deduplicate-executables` | `DeduplicateExecutablesPass` | - | 去重可执行文件 |
+| `--iree-flow-replicate-globals-per-affinity` | `ReplicateGlobalsPerAffinityPass` | - | 按亲和性复制全局变量 |
+| `--iree-flow-inject-dispatch-tracing` | `InjectDispatchTracingPass` | - | 注入 dispatch 追踪 |
+| `--iree-flow-inject-tensor-tracing` | `InjectTensorTracingPass` | - | 注入 tensor 追踪 |
+| `--iree-flow-outline-constants` | `OutlineConstantsPass` | - | 提取常量 |
+| `--iree-flow-export-benchmark-funcs` | `ExportBenchmarkFuncsPass` | `ModuleOp` | 导出基准测试函数 |
+| `--iree-flow-dump-dispatch-graph` | `DumpDispatchGraphPass` | `ModuleOp` | 输出 dispatch 计算图 |
+| `--iree-flow-top-level-scf-to-cfg` | `TopLevelSCFToCFGPass` | - | 将顶层 SCF 转为 CFG |
+| `--iree-flow-convert-to-flow` | `ConvertToFlowPass` | - | 转换到 Flow dialect |
+| `--iree-flow-cleanup-tensor-shapes` | `CleanupTensorShapesPass` | - | 清理 tensor 形状 |
+
+### 3.12 Dialect / HAL（37 个 Pass）
+
+| 类别 | 关键 Pass | 描述 |
+|---|---|---|
+| **设备相关** | `AssignTargetDevicesPass` | 分配目标设备 |
+| | `MaterializeTargetDevicesPass` | 具体化目标设备 |
+| | `ResolveDevicePromisesPass` | 解析设备 promise |
+| | `ResolveDeviceAliasesPass` | 解析设备别名 |
+| | `VerifyDevicesPass` | 验证设备 |
+| **Executable 配置** | `ConfigureExecutablesPass` | 配置可执行文件 |
+| | `ConfigureTargetExecutableVariantsPass` | 配置目标可执行文件变体 |
+| | `TranslateAllExecutablesPass` | 翻译所有可执行文件 |
+| | `SerializeAllExecutablesPass` | 序列化所有可执行文件 |
+| | `LinkAllExecutablesPass` | 链接所有可执行文件 |
+| | `PruneExecutablesPass` | 裁剪可执行文件 |
+| **源码/调试** | `CaptureExecutableSourcesPass` | 捕获可执行源码 |
+| | `DumpExecutableSourcesPass` | 输出可执行源码 |
+| | `StripExecutableContentsPass` | 剥离可执行内容 |
+| **Lowering** | `ConvertToHALPass` | 转换到 HAL dialect |
+| | `MaterializeInterfacesPass` | 具体化接口 |
+| | `MaterializeResourceCachesPass` | 具体化资源缓存 |
+| **命令优化** | `InitializeDevicesPass` | 初始化设备 |
+| | `MemoizeDeviceSelectionPass` | 记忆设备选择 |
+| | `ElideRedundantCommandsPass` | 消除冗余命令 |
+| | `RepeatDispatchesPass` | 重复 dispatch |
+
+### 3.13 Dialect / Stream（40 个 Pass）
+
+| 类别 | 关键 Pass | 描述 |
+|---|---|---|
+| **验证** | `VerifyInputPass` | 验证输入 |
+| | `VerifyLoweringToTensorsPass` | 验证 Tensor lowering |
+| | `VerifyLoweringToAsyncPass` | 验证 Async lowering |
+| | `VerifyLoweringToCmdPass` | 验证 Cmd lowering |
+| **转换** | `ConvertToStreamPass` | 转换到 Stream dialect |
+| | `CloneToConsumersPass` | 克隆到消费者 |
+| | `AnnotateAffinitiesPass` | 注解亲和性 |
+| **编码/内存** | `EncodeHostTensorsPass` | 编码主机张量 |
+| | `EncodeDeviceTensorsPass` | 编码设备张量 |
+| | `MaterializeEncodingsPass` | 具体化编码 |
+| | `SpecializeEncodingsPass` | 特化编码 |
+| **调度/分配** | `ScheduleExecutionPass` | 调度执行 |
+| | `ScheduleConcurrencyPass` | 调度并发 |
+| | `ScheduleAllocationPass` | 调度分配 |
+| | `LayoutSlicesPass` | 布局切片 |
+| **优化** | `ElideAsyncCopiesPass` | 消除异步拷贝 |
+| | `EmplaceAllocationsPass` | 安置分配 |
+| | `EmplaceTransientsPass` | 安置瞬态 |
+| | `ReuseAllocationsPass` | 复用分配 |
+| | `FuseDispatchBindingsPass` | 融合 dispatch 绑定 |
+| **常量/参数** | `PackConstantsPass` | 打包常量 |
+| | `PackDispatchOperandsPass` | 打包 dispatch 操作数 |
+| **ARC** | `AutomaticReferenceCountingPass` | 自动引用计数 |
+
+### 3.14 Dialect / Util（22 个 Pass）
+
+| 类别 | 关键 Pass | 描述 |
+|---|---|---|
+| **全局优化** | `FoldGlobalsPass` | 折叠全局变量 |
+| | `FuseGlobalsPass` | 融合全局变量 |
+| | `CombineInitializersPass` | 合并初始化器 |
+| | `HoistIntoGlobalsPass` | 提升为全局变量 |
+| | `OptimizeIntArithmeticPass` | 优化整数算术 |
+| **IPO/链接** | `IPOPass` | 过程间优化 |
+| | `LinkModulesPass` | 链接模块 |
+| | `AttributeCallGraphPass` | 属性调用图 |
+| **调试/测试** | `AnnotateOpOrdinalsPass` | 注解 op 序号 |
+| | `DumpModulePass` | 输出模块 |
+| | `StripDebugOpsPass` | 剥离调试 op |
+
+### 3.15 Dialect / VM（13 个 Pass）
+
+| 命令行 Flag | Pass 类名 | 作用 Op | 描述 |
+|---|---|---|---|
+| `--iree-vm-conversion` | `ConversionPass` | `ModuleOp` | 从标准/HAL 等 dialect 转到 VM dialect |
+| `--iree-vm-global-initialization` | `GlobalInitializationPass` | - | 全局初始化 |
+| `--iree-vm-ordinal-allocation` | `OrdinalAllocationPass` | `ModuleOp` | 分配序号 |
+| `--iree-vm-deduplicate-rodata` | `DeduplicateRodataPass` | - | 去重只读数据 |
+| `--iree-vm-hoist-inlined-rodata` | `HoistInlinedRodataPass` | - | 提升内联只读数据 |
+| `--iree-vm-resolve-rodata-loads` | `ResolveRodataLoadsPass` | - | 解析只读数据加载 |
+| `--iree-vm-drop-empty-module-initializers` | `DropEmptyModuleInitializersPass` | - | 删除空模块初始化器 |
+| `--iree-vm-drop-unused-calls` | `DropUnusedCallsPass` | - | 删除未使用的调用 |
+
+### 3.16 Dialect / VMVX（3 个 Pass）
+
+| 命令行 Flag | Pass 类名 | 作用 Op | 描述 |
+|---|---|---|---|
+| `--iree-vmvx-conversion` | `ConversionPass` | `ModuleOp` | VMVX 转换 |
+| `--iree-vmvx-materialize-constants` | `MaterializeConstantsPass` | `ModuleOp` | 具体化常量 |
+| `--iree-vmvx-resolve-buffer-descriptors` | `ResolveBufferDescriptorsPass` | - | 解析缓冲区描述符 |
+
+### 3.17 Dialect / LinalgExt（13 个 Pass）
+
+| 命令行 Flag | Pass 类名 | 描述 |
+|---|---|---|
+| `--iree-linalg-ext-convert-attention-to-online-attention` | `ConvertAttentionToOnlineAttentionPass` | 将 Attention 转为 Online Attention |
+| `--iree-linalg-ext-decompose-attention` | `DecomposeAttentionPass` | 分解 Attention |
+| `--iree-linalg-ext-convert-conv2d-to-winograd` | `ConvertConv2DToWinogradPass` | 将 Conv2D 转为 Winograd |
+| `--iree-linalg-ext-decompose-winograd-transform` | `DecomposeWinogradTransformPass` | 分解 Winograd 变换 |
+| `--iree-linalg-ext-convert-conv-to-im2col` | `ConvertConvToIm2ColOpPass` | 将 Conv 转为 Im2Col |
+| `--iree-linalg-ext-to-loops` | `LinalgExtToLoopsPass` | LinalgExt 转循环 |
+| `--iree-linalg-ext-pad-contraction-to-block-size` | `PadContractionToBlockSizePass` | 填充 contraction 到块大小 |
+| `--iree-linalg-ext-fold-unit-extent-dims` | `FoldUnitExtentDimsPass` | 折叠单位维度 |
+| `--iree-linalg-ext-topk-split-reduction` | `TopkSplitReductionPass` | TopK 拆分 reduction |
+
+### 3.18 DispatchCreation（31 个 Pass）
+
+| 类别 | 关键 Pass | 描述 |
+|---|---|---|
+| **区域形成** | `FormDispatchRegionsPass` | 形成 dispatch 区域 |
+| | `FormScalarDispatchesPass` | 形成标量 dispatch |
+| | `FormSplitReductionDispatchesPass` | 形成拆分 reduction dispatch |
+| | `ConvertDispatchRegionsToWorkgroupsPass` | 将 dispatch 区域转为 workgroup |
+| **融合** | `ElementwiseOpFusionPass` | 元素级 op 融合 |
+| | `FuseMultiUseElementwiseProducerPass` | 多用途元素级生产者融合 |
+| | `FuseHorizontalContractionsPass` | 水平 contraction 融合 |
+| | `CloneProducersIntoDispatchRegionsPass` | 将生产者克隆到 dispatch 区域 |
+| **编码/数据布局** | `SetEncodingPass` | 设置编码 |
+| | `PropagateEncodingsPass` | 传播编码 |
+| | `ConvertEncodingToFlowPass` | 编码转 Flow |
+| | `HoistEncodingOpsPass` | 提升编码 op |
+| **维度/reshape** | `CollapseDimensionsPass` | 折叠维度 |
+| | `FoldUnitExtentDimsPass` | 折叠单位维度 |
+| | `BubbleUpExpandShapesPass` | 冒泡展开形状 |
+| | `SinkReshapesPass` | 下沉 reshape |
+| | `TransposeGenericOpsPass` | 转置通用 op |
+| **规约拆分** | `SplitReductionPass` | 拆分 reduction |
+| | `SetSplitReductionSizesPass` | 设置拆分 reduction 大小 |
+| **其他** | `ConvertTensorToFlowPass` | Tensor 转 Flow |
+| | `InsertTensorBarriersPass` | 插入 tensor 屏障 |
+
+### 3.19 GlobalOptimization（22 个 Pass）
+
+| 命令行 Flag | Pass 类名 | 描述 |
+|---|---|---|
+| `--iree-global-opt-detach-elementwise-from-named-ops` | `DetachElementwiseFromNamedOpsPass` | 从命名 op 分离元素级 |
+| `--iree-global-opt-generalize-linalg-named-ops` | `GeneralizeLinalgNamedOpsPass` | 泛化 Linalg 命名 op |
+| `--iree-global-opt-convert-conv2d-to-img2col` | `ConvertConv2DToImg2ColPass` | Conv2D 转 Img2Col |
+| `--iree-global-opt-propagate-linalg-transpose` | `PropagateLinalgTransposePass` | 传播 Linalg 转置 |
+| `--iree-global-opt-raise-special-ops` | `RaiseSpecialOpsPass` | 提升特殊 op |
+| `--iree-global-opt-data-layout-propagation` | `DataLayoutPropagationPass` | 数据布局传播 |
+| `--iree-global-opt-simplify-pack-unpack` | `SimplifyPackUnpackPass` | 简化 pack/unpack |
+| `--iree-global-opt-materialize-homogeneous-encodings` | `MaterializeHomogeneousEncodingsPass` | 化同质编码 |
+| `--iree-global-opt-demote-contraction-inputs` | `DemoteContractionInputsPass` | 降级 contraction 输入 |
+| `--iree-global-opt-fuse-dequantization-matmul` | `FuseDequantizationMatmulPass` | 融合反量化 matmul |
+| `--iree-global-opt-expand-tensor-shapes` | `ExpandTensorShapesPass` | 展开张量形状 |
+| `--iree-global-opt-global-loop-invariant-code-motion` | `GlobalLoopInvariantCodeMotionPass` | 全局循环不变量代码移动 |
+| `--iree-global-opt-infer-numeric-narrowing` | `InferNumericNarrowingPass` | 推断数值收窄 |
+| `--iree-global-opt-optimize-numerics` | `OptimizeNumericsPass` | 优化数值 |
+| `--iree-global-opt-cleanup-numeric-narrowing` | `CleanupNumericNarrowingPass` | 清理数值收窄 |
+| `--iree-global-opt-warn-on-uninitialized-values` | `WarnOnUninitializedValuesPass` | 未初始化值警告 |
+
+### 3.20 InputConversion / Common（9 个 Pass）
+
+| 命令行 Flag | Pass 类名 | 作用 Op | 描述 |
+|---|---|---|---|
+| `--iree-auto-input-conversion` | `AutoInputConversionPipelinePass` | - | 自动选择输入 pipeline |
+| `--iree-import-public` | `IREEImportPublicPass` | - | 导入公共接口 |
+| `--iree-import-ml-program` | `ImportMLProgramPass` | - | 导入 ML program |
+| `--iree-sanitize-module-names` | `SanitizeModuleNamesPass` | `ModuleOp` | 清理模块名称 |
+| `--iree-promote-f16-to-f32` | `PromoteF16ToF32Pass` | - | F16 提升为 F32 |
+| `--iree-promote-bf16-to-f32` | `PromoteBF16ToF32Pass` | - | BF16 提升为 F32 |
+| `--iree-demote-f32-to-f16` | `DemoteF32ToF16Pass` | - | F32 降级为 F16 |
+| `--iree-demote-f64-to-f32` | `DemoteF64ToF32Pass` | - | F64 降级为 F32 |
+| `--iree-demote-i64-to-i32` | `DemoteI64ToI32Pass` | - | I64 降级为 I32 |
+
+### 3.21 Modules / HAL Inline（2 个 Pass）
+
+| 命令行 Flag | Pass 类名 | 作用 Op | 描述 |
+|---|---|---|---|
+| `--iree-hal-inline-conversion` | `ConversionPass` | `ModuleOp` | HAL Inline 转换 |
+| `--iree-hal-inline-executables` | `InlineExecutablesPass` | `ModuleOp` | 内联可执行文件 |
+
+### 3.22 Modules / HAL Loader（3 个 Pass）
+
+| 命令行 Flag | Pass 类名 | 作用 Op | 描述 |
+|---|---|---|---|
+| `--iree-hal-loader-conversion` | `ConversionPass` | `ModuleOp` | HAL Loader 转换 |
+| `--iree-hal-loader-materialize-executables` | `MaterializeExecutablesPass` | `ModuleOp` | 具体化可执行文件 |
+| `--iree-hal-loader-resolve-export-ordinals` | `ResolveExportOrdinalsPass` | `ModuleOp` | 解析导出序号 |
+
+### 3.23 Modules / IO Parameters（3 个 Pass）
+
+| 命令行 Flag | Pass 类名 | 作用 Op | 描述 |
+|---|---|---|---|
+| `--iree-io-import-parameters` | `ImportParametersPass` | `ModuleOp` | 导入参数 |
+| `--iree-io-export-parameters` | `ExportParametersPass` | `ModuleOp` | 导出参数 |
+| `--iree-io-generate-splat-parameter-archive` | `GenerateSplatParameterArchivePass` | `ModuleOp` | 生成 splat 参数归档 |
+
+### 3.24 Preprocessing / Common（15 个 Pass）
+
+| 命令行 Flag | Pass 类名 | 描述 |
+|---|---|---|
+| `--iree-preprocessing-apply-pdl-patterns` | `ApplyPDLPatternsPass` | 应用 PDL 模式 |
+| `--iree-preprocessing-interpreter` | `InterpreterPass` | 解释器 |
+| `--iree-preprocessing-attr-based-pipeline` | `AttrBasedPipelinePass` | 基于属性的 pipeline |
+| `--iree-preprocessing-convert-conv-to-channels-last` | `ConvertConvToChannelsLastPass` | 将 Conv 转为 channels-last |
+| `--iree-preprocessing-convert-1x1-filter-conv2d-to-matmul` | `Convert1X1FilterConv2DToMatmulPass` | 1x1 卷积转 matmul |
+| `--iree-preprocessing-generalize-linalg-matmul` | `GeneralizeLinalgMatMulPass` | 泛化 Linalg MatMul |
+| `--iree-preprocessing-transpose-matmul` | `TransposeMatmulPass` | 转置 MatMul |
+| `--iree-preprocessing-pad-linalg-ops` | `PadLinalgOpsPass` | 填充 Linalg op |
+| `--iree-preprocessing-pad-to-intrinsics` | `PadToIntrinsicsPass` | 填充到内建函数 |
+| `--iree-preprocessing-promote-linalg-outputs` | `PromoteLinalgOutputsPass` | 提升 Linalg 输出 |
+| `--iree-preprocessing-fold-attention-with-transpose` | `FoldAttentionWithTransposePass` | 折叠 Attention 与 transpose |
+| `--iree-preprocessing-make-single-dispatch-for-function` | `MakeSingleDispatchForFunctionPass` | 为函数创建单个 dispatch |
+
+### 3.25 Transforms（2 个 Pass）
+
+| 命令行 Flag | Pass 类名 | 描述 |
+|---|---|---|
+| `--iree-affine-expand-index-ops` | `IREEAffineExpandIndexOpsPass` | 展开 Affine 索引 op |
+| `--iree-lower-affine` | `IREELowerAffinePass` | 降低 Affine |
+
+---
+
+## 4. 编译 Pipeline 阶段与 Pass 顺序
+
+### 4.1 顶层 IREE VM Pipeline
+
+定义位置: `Pipelines/Pipelines.cpp`
+
+| 阶段 | 主要 Pass 顺序 |
+|---|---|
+| **1. Input 输入转换** | `AutoInputConversionPipelinePass` → `buildCommonInputConversionPassPipeline` |
+| **2. ABI 入口包装** | `IREE::ABI::buildTransformPassPipeline` (Native) / `IREE::TFLite::buildTransformPassPipeline` (TFLite) |
+| **3. HAL 设备分配** | `AssignLegacyTargetDevicesPass` → `MaterializeTargetDevicesPass` → `ResolveDevicePromisesPass` → `ResolveDeviceAliasesPass` → `VerifyDevicesPass` |
+| **4. Preprocessing 预处理** | `buildPreprocessingPassPipeline` |
+| **5. GlobalOptimization 全局优化** | 常量提升、Linalg 规范化、数据布局传播、编码物化、数值优化等 |
+| **6. DispatchCreation 创建** | 元素级融合、编码、区域形成、split reduction、转 tensor 到 flow |
+| **7. Flow 转换** | `VerifyInputLegalityPass` → `InitializeEmptyTensorsPass` → `CaptureDynamicDimsPass` → `OutlineDispatchRegionsPass` → `OutlineDispatchExternsPass` → `AnnotateDispatchesPass` → `DeduplicateExecutablesPass` |
+| **8. Stream 异步调度** | `buildStreamTensorPassPipeline` → `buildStreamAsyncPassPipeline` → `buildStreamCmdPassPipeline` → `buildStreamOptimizationPassPipeline` |
+| **9. HAL 硬件抽象** | `buildHALConfigurationPassPipeline` → `buildHALTransformPassPipeline` → `ConvertToHALPass` → `MaterializeResourceCachesPass` → `InitializeDevicesPass` |
+| **10. VM 虚拟机** | `buildVMTransformPassPipeline` |
+
+### 4.2 Stream Pipeline 子阶段
+
+定义位置: `Dialect/Stream/Transforms/Passes.cpp`
+
+| 子阶段 | Pass 顺序 |
+|---|---|
+| **Tensor** | `VerifyInputPass` → cleanup → `CloneToConsumersPass` → `AnnotateAffinitiesPass` → `ConvertToStreamPass` → `VerifyLoweringToTensorsPass` |
+| **Async** | `SpecializeEncodingsPass` → `EncodeHostTensorsPass` / `EncodeDeviceTensorsPass` → `MaterializeEncodingsPass` → `LayoutSlicesPass` → `ScheduleExecutionPass` / `ScheduleConcurrencyPass` → `MaterializeBuiltinsPass` → `VerifyLoweringToAsyncPass` |
+| **Cmd** | `ScheduleAllocationPass` → `EmplaceTransientsPass` → `PackConstantsPass` → `AutomaticReferenceCountingPass` → `VerifyLoweringToCmdPass` |
+| **Optimization** | IPO → reuse allocations → fuse bindings → fold operands |
+
+### 4.3 HAL Pipeline 子阶段
+
+定义位置: `Dialect/HAL/Transforms/Passes.cpp`
+
+| 子阶段 | Pass 顺序 |
+|---|---|
+| **配置** | `MaterializeDispatchInstrumentationPass` → `MaterializeInterfacesPass` → `PruneExecutablesPass` → `ConfigureExecutablesPass` |
+| **翻译** | `TranslateAllExecutablesPass` |
+| **后处理** | `ConvertToHALPass` → `OutlineMemoizeRegionsPass` → `PruneExecutablesPass` → `LinkAllExecutablesPass` → `ResolveExportOrdinalsPass` → `MaterializeResourceCachesPass` → `InitializeDevicesPass` |
+| **序列化** | `SerializeAllExecutablesPass` |
+
+### 4.4 Codegen Pipeline 典型顺序
+
+| 目标后端 | 典型顺序 |
+|---|---|
+| **LLVMCPU** | `SelectLoweringStrategyPass` → `TileAndDistributeToWorkgroupsUsingForallOpPass` → Bufferize → Vectorize → Tile → Peel → `CPULowerToUKernelsPass` → `ConvertToLLVMPass` |
+| **LLVMGPU** | `SelectLoweringStrategyPass` → `TileAndDistributeToWorkgroupsUsingForallOpPass` → Bufferize → Vectorize → `LLVMGPUTensorCoreVectorizationPass` → `ConvertToNVVMPass` / `ConvertToROCDLPass` |
+| **SPIRV** | `SelectLoweringStrategyPass` → `SPIRVTileAndDistributePass` → `SPIRVTileToCooperativeOpsPass` → `ConvertToSPIRVPass` |
+| **VMVX** | `SelectLoweringStrategyPass` → `VMVXLowerLinalgMicrokernelsPass` → `VMVXLinkExecutablesPass` |
+
+---
+
+## 5. 关键源文件索引
+
+| 类别 | 文件路径 |
+|---|---|
+| 全局 Dialect 注册 | `Tools/init_iree_dialects.h` |
+| 编译器模块 Dialect 注册 | `Tools/init_compiler_modules.h` |
+| 全局 Pass 注册 | `Tools/init_iree_passes.h` |
+| 顶层 Pipeline | `Pipelines/Pipelines.cpp` |
+| Flow Pipeline | `Dialect/Flow/Transforms/Passes.cpp` |
+| Stream Pipeline | `Dialect/Stream/Transforms/Passes.cpp` |
+| HAL Pipeline | `Dialect/HAL/Transforms/Passes.cpp` |
+| VM Pipeline | `Dialect/VM/Transforms/Passes.cpp` |
+| DispatchCreation Pipeline | `DispatchCreation/Passes.cpp` |
+| GlobalOptimization Pipeline | `GlobalOptimization/Passes.cpp` |
+| CPU Codegen Pipeline | `Codegen/LLVMCPU/Passes.cpp` |
+| GPU Codegen Pipeline | `Codegen/LLVMGPU/Passes.cpp` |
+| SPIRV Codegen Pipeline | `Codegen/SPIRV/Passes.cpp` |
+
+---
+
+## 6. Pass 命名与位置对应关系
+
+以 `--iree-flow-annotate-dispatches` 为例说明 Pass 的对应关系：
+
+| 项目 | 值 | 说明 |
+|---|---|---|
+| **命令行 Flag** | `--iree-flow-annotate-dispatches` | 用户在 `iree-opt` 或 `iree-compile` 中使用 |
+| **Pass 类名** | `AnnotateDispatchesPass` | C++ 中的类名称 |
+| **TableGen 定义文件** | `Dialect/Flow/Transforms/Passes.td` | Pass 的 TableGen 定义 |
+| **实现文件** | `Dialect/Flow/Transforms/AnnotateDispatches.cpp` | Pass 的实际 C++ 实现代码 |
+| **注册文件** | `Dialect/Flow/Transforms/Passes.h` | 包含 `GEN_PASS_REGISTRATION` 宏 |
+| **命名空间** | `IREE::Flow` | 所属 Dialect 的命名空间 |
+| **Pipeline 函数** | `buildFlowTransformPassPipeline` | 添加此 Pass 的 Pipeline 构建函数 |
+
+### TableGen 定义示例
+
+```tablegen
+// 文件: Dialect/Flow/Transforms/Passes.td
+def AnnotateDispatchesPass :
+    Pass<"iree-flow-annotate-dispatches", "mlir::ModuleOp"> {
+  let summary = "Annotates dispatch execution information";
+  let description = [{
+    注解 dispatch 的执行信息，如工作负载大小等。
+  }];
+  let constructor = "createAnnotateDispatchesPass()";
+}
+```
+
+### C++ 注册示例
+
+```cpp
+// 文件: Dialect/Flow/Transforms/Passes.h
+#ifndef IREE_COMPILER_DIALECT_FLOW_TRANSFORMS_PASSES_H_
+#define IREE_COMPILER_DIALECT_FLOW_TRANSFORMS_PASSES_H_
+
+#include "mlir/Pass/Pass.h"
+
+namespace mlir::iree_compiler::IREE::Flow {
+
+std::unique_ptr<OperationPass<ModuleOp>> createAnnotateDispatchesPass();
+
+// 生成 Pass 注册代码
+#define GEN_PASS_REGISTRATION
+#include "iree/compiler/Dialect/Flow/Transforms/Passes.h.inc"
+
+} // namespace mlir::iree_compiler::IREE::Flow
+#endif // IREE_COMPILER_DIALECT_FLOW_TRANSFORMS_PASSES_H_
+```
+
+### Pipeline 添加示例
+
+```cpp
+// 文件: Dialect/Flow/Transforms/Passes.cpp
+void buildFlowTransformPassPipeline(OpPassManager &passManager) {
+  // ... 其他 Pass
+  passManager.addPass(createAnnotateDispatchesPass());
+  // ... 其他 Pass
+}
+```
+
+### 命名约定模式
+
+| 组件 | 命名前缀 | 示例 |
+|---|---|---|
+| **Flow Dialect** | `iree-flow-` | `--iree-flow-annotate-dispatches` |
+| **Stream Dialect** | `iree-stream-` | `--iree-stream-schedule-execution` |
+| **HAL Dialect** | `iree-hal-` | `--iree-hal-convert-to-hal` |
+| **VM Dialect** | `iree-vm-` | `--iree-vm-conversion` |
+| **DispatchCreation** | `iree-codegen-` | `--iree-codegen-form-dispatch-regions` |
+| **GlobalOptimization** | `iree-global-opt-` | `--iree-global-opt-generalize-linalg-named-ops` |
+| **LLVMCPU Codegen** | `iree-llvmcpu-` | `--iree-llvmcpu-select-lowering-strategy` |
+| **LLVMGPU Codegen** | `iree-llvmgpu-` | `--iree-llvmgpu-tile-and-distribute` |
+| **SPIRV Codegen** | `iree-spirv-` | `--iree-spirv-convert-to-spirv` |
+
+---
+
+## 总结
+
+- **Dialect 总数**: 19 个
+- **Pass 总数**: 486 个
+- **主要 Pipeline 阶段**: 10 个（Input → ABI → HAL Device → Preprocessing → GlobalOptimization → DispatchCreation → Flow → Stream → HAL → VM）
+- **目标后端**: LLVMCPU、LLVMGPU(NVVM/ROCDL)、SPIRV、VMVX
+
+所有 Pass 和 Dialect 都定义在 `compiler/src/iree/compiler/` 目录下，通过 TableGen 定义并使用 C++ 实现。

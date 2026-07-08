@@ -1,0 +1,1076 @@
+---
+title: 'iree-opt 功能分类'
+date: '2026-05-10'
+tags:
+  - IREE
+  - 编译器
+  - MLIR
+  - ONNX
+  - Pass
+  - Dialect
+  - 编译原理
+  - 编译器前端
+  - 编译器后端
+  - 调试
+  - 编译优化
+  - LLVM
+  - CPU
+  - GPU
+draft: false
+summary: '> 基于 `iree-opt --help` 输出整理，约 400+ 个 pass 和 50+ 个 pass pipeline。 --- 例如运行 `cse`（公共子表达式消除）： 用 `--pass-pipeline` 指定完整的 pipeline，pass 之间用空格分隔： 某些 pass...'
+---
+
+
+> 基于 `iree-opt --help` 输出整理，约 400+ 个 pass 和 50+ 个 pass pipeline。
+
+---
+
+## 使用方法
+
+### 运行单个 pass
+
+```bash
+iree-opt --pass-name input.mlir
+```
+
+例如运行 `cse`（公共子表达式消除）：
+
+```bash
+iree-opt --cse input.mlir
+```
+
+### 运行多个 pass
+
+用 `--pass-pipeline` 指定完整的 pipeline，pass 之间用空格分隔：
+
+```bash
+iree-opt --pass-pipeline="cse canonicalize inline" input.mlir
+```
+
+### 嵌套 pipeline（带参数）
+
+某些 pass 需要传参，用括号包裹：
+
+```bash
+iree-opt --pass-pipeline="builtin.module(canonicalize{max-iterations=10} cse)" input.mlir
+```
+
+或者逐 pass 调用（每个 pass 独立运行）：
+
+```bash
+iree-opt --cse --canonicalize input.mlir
+```
+
+### 查看 IR 变化
+
+调试时最常用，打印每个 pass 前后的 IR：
+
+```bash
+# 打印所有 pass 之后的 IR
+iree-opt --mlir-print-ir-after-all --pass-pipeline="cse canonicalize" input.mlir
+
+# 只看特定 pass 前后的 IR
+iree-opt --mlir-print-ir-before="cse" --mlir-print-ir-after="cse" --cse input.mlir
+
+# 仅在 IR 发生变化时打印
+iree-opt --mlir-print-ir-after-all --mlir-print-ir-after-change --pass-pipeline="..." input.mlir
+```
+
+### 实际示例
+
+```bash
+# 1. 只看某个 IREE pass 做了什么
+iree-opt --iree-flow-canonicalize input.mlir
+
+# 2. 组合多个 IREE pass
+iree-opt --pass-pipeline="builtin.module(iree-flow-canonicalize cse iree-util-fold-globals)" input.mlir
+
+# 3. 运行完整的 flow transformation pipeline
+iree-opt --iree-flow-transformation-pipeline input.mlir
+
+# 4. 运行 dispatch creation pipeline（形成 dispatch 区域）
+iree-opt --iree-dispatch-creation-pipeline input.mlir
+
+# 5. 查看每个 pass 的统计信息
+iree-opt --mlir-pass-statistics --pass-pipeline="builtin.module(cse canonicalize inline)" input.mlir
+
+# 6. 每个 pass 后验证 IR 正确性
+iree-opt --verify-each --pass-pipeline="builtin.module(cse canonicalize)" input.mlir
+```
+
+### 查看有哪些 pass
+
+```bash
+# 列出所有已注册的 pass
+iree-opt --list-passes
+
+# 列出所有已注册的 dialect
+iree-opt --show-dialects
+```
+
+### 注意事项
+
+1. **`--pass-pipeline` 需要顶层操作**：大多数 pipeline 需要用 `builtin.module(...)` 包裹，因为 pass 是作用在 module 上的。
+2. **pass 执行顺序很重要**：IREE 的 pipeline 有严格的前后依赖关系，单个调试时可以只跑某个 pass 看效果，但完整编译需要用官方 pipeline。
+3. **`-o` 指定输出文件**：默认输出到 stdout，用 `-o output.mlir` 保存到文件。
+
+---
+
+## 一、IREE 核心 Dialect Pass
+
+### 1.1 Flow Dialect（流变换）
+| Pass | 功能 |
+|------|------|
+| `--iree-flow-annotate-dispatches` | 注解 dispatch 的执行信息 |
+| `--iree-flow-canonicalize` | Flow 专属的规范化 pass |
+| `--iree-flow-capture-dynamic-dims` | 捕获 dispatch 需要的动态维度 |
+| `--iree-flow-cleanup-tensor-shapes` | 清理残留的 tensor shape 元数据 |
+| `--iree-flow-deduplicate-executables` | 去重相同的 executable |
+| `--iree-flow-dump-dispatch-graph-pass` | 可视化 dump dispatch 图 |
+| `--iree-flow-export-benchmark-funcs-pass` | 导出 benchmark 函数 |
+| `--iree-flow-initialize-empty-tensors` | 初始化空 tensor（可 zero-fill） |
+| `--iree-flow-inject-dispatch-tracing` | 注入 dispatch trace 标记 |
+| `--iree-flow-inject-tensor-tracing` | 注入 tensor trace |
+| `--iree-flow-insert-debug-target-at-ordinal/symbol` | 在指定位置插入断点/trace |
+| `--iree-flow-outline-constants` | 将常量 outline 到 util.global |
+| `--iree-flow-outline-dispatch-externs/regions` | 将 dispatch outline 到 executable |
+| `--iree-flow-replicate-globals-per-affinity` | 按 affinity 复制全局变量 |
+
+### 1.2 Dispatch Creation（Dispatch 区域形成）
+| Pass | 功能 |
+|------|------|
+| `--iree-dispatch-creation-annotate-data-tiling-hints` | 添加 data-tiling 提示 |
+| `--iree-dispatch-creation-bitcast-unsupported-element-types` | 位转换不支持的类型 |
+| `--iree-dispatch-creation-bubble-up-expand-shapes` | 传播 expand_shape 向上 |
+| `--iree-dispatch-creation-clone-producers-into-dispatch-regions` | 克隆 producer 到 dispatch |
+| `--iree-dispatch-creation-collapse-dimensions` | 折叠 Linalg 维度 |
+| `--iree-dispatch-creation-convert-dispatch-regions-to-workgroups` | 转换为 workgroup |
+| `--iree-dispatch-creation-convert-encoding-to-flow` | 转换 encoding 到 flow |
+| `--iree-dispatch-creation-convert-tensor-to-flow` | 转换 tensor 操作到 flow |
+| `--iree-dispatch-creation-elementwise-op-fusion` | 逐元素操作融合 |
+| `--iree-dispatch-creation-fold-reshapes-into-tensor-barriers` | 折叠 reshape 到 barrier |
+| `--iree-dispatch-creation-fold-unit-extent-dims` | 折叠单位维度 |
+| `--iree-dispatch-creation-form-dispatch-regions` | 从 Linalg 形成 dispatch 区域 |
+| `--iree-dispatch-creation-form-scalar-dispatches` | 形成标量 dispatch |
+| `--iree-dispatch-creation-form-split-reduction-dispatches` | 拆分 reduction dispatch |
+| `--iree-dispatch-creation-fuse-encoding-ops-into-dispatch-regions-pass` | 融合 encoding 到 producer |
+| `--iree-dispatch-creation-fuse-horizontal-contractions` | 水平融合 contraction |
+| `--iree-dispatch-creation-fuse-multi-use-elementwise-producer` | 多使用 elementwise 融合 |
+| `--iree-dispatch-creation-fusion-preprocessing` | 融合前预处理 |
+| `--iree-dispatch-creation-hoist-encoding-ops` | 提升 encoding 出 dispatch |
+| `--iree-dispatch-creation-hoist-uniform-scalar-compute` | 提升均匀标量计算 |
+| `--iree-dispatch-creation-insert-tensor-barriers` | 插入 tensor barrier 标记 |
+| `--iree-dispatch-creation-materialize-default-workgroup-count-region` | 规范化 workgroup count |
+| `--iree-dispatch-creation-propagate-encodings` | 传播 encoding |
+| `--iree-dispatch-creation-remove-tensor-barriers` | 移除 tensor barrier |
+| `--iree-dispatch-creation-set-encoding` | 引入 tensor encoding |
+| `--iree-dispatch-creation-set-split-reduction-sizes` | 设置拆分 reduction 大小 |
+| `--iree-dispatch-creation-sink-reshapes` | 下沉 reshape |
+| `--iree-dispatch-creation-split-reduction-ops` | 拆分 reduction 维度增加并行 |
+| `--iree-dispatch-creation-transpose-generic-ops` | 转置 generic op 循环 |
+
+### 1.3 Stream Dialect（流/调度）
+| Pass | 功能 |
+|------|------|
+| `--iree-stream-annotate-affinities/constant-transient-size/dispatch-arguments/assumptions` | 各类注解调试 |
+| `--iree-stream-automatic-reference-counting` | 自动引用计数 |
+| `--iree-stream-clone-to-consumers` | 克隆到 consumer affinity |
+| `--iree-stream-conversion` | 从 flow 转换到 stream |
+| `--iree-stream-dump-statistics` | 导出 stream 使用统计 |
+| `--iree-stream-elide-async-copies/timepoints` | 消除冗余拷贝/时间戳 |
+| `--iree-stream-emplace-allocations/transients` | 放置临时分配 |
+| `--iree-stream-encode-device/host-tensors` | 编码 tensor 为二进制格式 |
+| `--iree-stream-fold-uniform-operands` | 折叠统一常量操作数 |
+| `--iree-stream-fuse-dispatch-bindings` | 融合绑定减少数量 |
+| `--iree-stream-layout-slices` | 布局 packed slice |
+| `--iree-stream-materialize-builtins/copy-on-write/encodings/transient-size-queries` | 物化各种 stream 操作 |
+| `--iree-stream-pack-constants/dispatch-operands` | 打包常量/操作数 |
+| `--iree-stream-propagate-timepoints` | 传播时间戳到 consumer |
+| `--iree-stream-refine-usage` | 精炼资源使用位 |
+| `--iree-stream-reuse-allocations` | 复用临时分配 |
+| `--iree-stream-schedule-allocation/concurrency/execution` | 调度分配/并发/执行 |
+| `--iree-stream-specialize-dispatches/encodings` | 特化 dispatch/encoding |
+| `--iree-stream-split-parameter-encoder` | 拆分参数编码器模块 |
+| `--iree-stream-sync-initializers` | 同步初始化器 |
+| `--iree-stream-unify-encoding-for-globals` | 统一全局变量 encoding |
+| `--iree-stream-verify-*` | 各类验证 pass |
+
+### 1.4 HAL Dialect（硬件抽象层）
+| Pass | 功能 |
+|------|------|
+| `--iree-hal-annotate-target-devices` | 注解设备目标 |
+| `--iree-hal-assign-legacy-target-devices/target-devices` | 分配 HAL 设备目标 |
+| `--iree-hal-capture-executable-sources` | 捕获 executable 源码 |
+| `--iree-hal-configure-executables/target-executable-variants` | 配置 executable |
+| `--iree-hal-conversion` | 转换到 HAL dialect |
+| `--iree-hal-dump-executable-benchmarks/sources` | 导出 benchmark/源码 |
+| `--iree-hal-elide-redundant-commands` | 消除冗余命令 |
+| `--iree-hal-hoist-executable-objects` | 提升 executable 对象 |
+| `--iree-hal-initialize-devices` | 初始化设备句柄 |
+| `--iree-hal-inline-conversion/inline-executables` | 内联 HAL executable |
+| `--iree-hal-inline-memoize-regions` | 内联 memoize 区域 |
+| `--iree-hal-link-all-executables/link-target-executables` | 链接 executable |
+| `--iree-hal-loader-conversion/materialize-executables/resolve-export-ordinals` | Loader 相关 |
+| `--iree-hal-materialize-dispatch-instrumentation/interfaces/resource-caches/target-devices` | 物化 HAL 资源 |
+| `--iree-hal-memoize-device-queries/selection` | Memoize 设备查询 |
+| `--iree-hal-outline-memoize-regions` | Outline memoize 区域 |
+| `--iree-hal-preprocess-executables-with-pipeline/tool` | 预处理 executable |
+| `--iree-hal-prune-executables` | 裁剪未引用的 variant |
+| `--iree-hal-repeat-dispatches` | 重复 dispatch |
+| `--iree-hal-resolve-device-aliases/promises/export-ordinals/topology-queries` | 解析各种 HAL 引用 |
+| `--iree-hal-serialize-all-executables/serialize-target-executables` | 序列化 executable |
+| `--iree-hal-strip-executable-contents` | 剥离 executable 内容减小 IR |
+| `--iree-hal-substitute-executables` | 替换 executable 为磁盘文件 |
+| `--iree-hal-translate-all-executables/translate-target-executable-variants` | 翻译 executable |
+| `--iree-hal-verify-devices` | 验证设备可达性 |
+
+### 1.5 Util Dialect（工具）
+| Pass | 功能 |
+|------|------|
+| `--iree-util-annotate-op-ordinals` | 注解全局唯一 ID |
+| `--iree-util-apply-patterns` | 应用规范化模式 |
+| `--iree-util-attribute-call-graph` | 传播属性到调用点 |
+| `--iree-util-combine-initializers` | 合并全局初始化器 |
+| `--iree-util-drop-compiler-hints` | 删除无运行时等效的操作 |
+| `--iree-util-dump-module` | 导出模块 IR |
+| `--iree-util-fixed-point-iterator` | 迭代子 pipeline 到不动点 |
+| `--iree-util-fold-globals` | 折叠重复全局变量 |
+| `--iree-util-fuse-globals` | 融合相关全局变量 |
+| `--iree-util-hoist-into-globals` | 提升常量表达式到全局 |
+| `--iree-util-import-resources` | 导入大数据资源 |
+| `--iree-util-ipo` | 跨过程优化 |
+| `--iree-util-lift-cfg-to-scf` | 提升非结构化控制流到 SCF |
+| `--iree-util-link-modules` | 链接外部函数模块 |
+| `--iree-util-optimize-int-arithmetic` | 优化整数算术 |
+| `--iree-util-propagate-subranges` | 传播资源子范围 |
+| `--iree-util-simplify-global-accesses` | 简化全局访问 |
+| `--iree-util-strip-and-splat-constants` | 剥离常量并替换为 splat |
+| `--iree-util-strip-debug-ops` | 剥离调试操作 |
+| `--iree-util-verify-initialization-order/structured-control-flow` | 验证 |
+
+### 1.6 VM Dialect（虚拟机）
+| Pass | 功能 |
+|------|------|
+| `--iree-vm-annotate-functions` | 注解 yield/unwind 要求 |
+| `--iree-vm-conversion` | 转换到 VM dialect |
+| `--iree-vm-convert-to-yieldable-calls` | 转换可 yield 调用 |
+| `--iree-vm-deduplicate-rodata` | 去重 rodata |
+| `--iree-vm-drop-empty-module-initializers/excluded-exports/optimization-barriers/unused-calls` | 清理无用 VM 操作 |
+| `--iree-vm-global-initialization` | 创建全局 init/deinit |
+| `--iree-vm-hoist-inlined-rodata` | 提升内联 rodata |
+| `--iree-vm-materialize-ref-discards` | 插入 ref discard |
+| `--iree-vm-ordinal-allocation` | 分配模块唯一序号 |
+| `--iree-vm-reify-rodata-tables` | 具体化 rodata 表 |
+| `--iree-vm-resolve-rodata-loads` | 解析 rodata 加载 |
+| `--iree-vm-sink-defining-ops` | 下沉少用操作到使用点 |
+
+### 1.7 I/O Parameters
+| Pass | 功能 |
+|------|------|
+| `--iree-io-export-parameters` | 导出全局常量到参数归档 |
+| `--iree-io-generate-splat-parameter-archive` | 生成 splat 参数归档 |
+| `--iree-io-import-parameters` | 从归档导入参数 |
+
+---
+
+## 二、IREE Codegen Pass（代码生成）
+
+### 2.1 Codegen 通用
+| Pass | 功能 |
+|------|------|
+| `--iree-codegen-absorb-swizzle-hint-to-alloc` | 吸收 swizzle_hint 到 alloc |
+| `--iree-codegen-add-fast-math-flags` | 添加快速数学标志 |
+| `--iree-codegen-affinemin-scf-canonicalization` | 清理 tiling 后的 affineMinOp |
+| `--iree-codegen-block-dynamic-dimensions` | 展开已知倍数动态维度 |
+| `--iree-codegen-bubble-up-ordinal-ops` | 上冒 ordinal op |
+| `--iree-codegen-bufferize-copy-only-dispatches` | Bufferize 仅拷贝 dispatch |
+| `--iree-codegen-bufferize-dispatch-tensor-load-store` | Bufferize dispatch tensor 边界 |
+| `--iree-codegen-canonicalize` | Codegen 专用规范化 |
+| `--iree-codegen-canonicalize-scf-for` | scf.for 循环携带值规范化 |
+| `--iree-codegen-cleanup-buffer-alloc-view` | 清理 HAL 接口/分配/视图 |
+| `--iree-codegen-combine-result/source-layout-transformation` | 合并布局变换到 map_store/map_load |
+| `--iree-codegen-concretize-pad-result-shape` | 具体化 pad 结果形状 |
+| `--iree-codegen-config-tracking-canonicalize` | 跟踪 lowering config 的规范化 |
+| `--iree-codegen-convert-constraints-to-smt` | 转换 SMT 约束 |
+| `--iree-codegen-convert-hal-descriptor-type-to-gpu-address-space` | HAL 描述符类型转 GPU 地址空间 |
+| `--iree-codegen-convert-unsupported-float-to-int-buffers` | 不支持的 float 转 int buffer |
+| `--iree-codegen-convert-workgroup-forall-to-pcf` | 转换 workgroup forall 到 pcf.loop |
+| `--iree-codegen-convolution-to-igemm` | 卷积转 implicit GEMM |
+| `--iree-codegen-cpu-lower-to-ukernels/prepare-ukernels` | CPU 微内核 lowering |
+| `--iree-codegen-cpu-propagate-data-layout` | 传播 pack/unpack/reshape 布局 |
+| `--iree-codegen-create-dispatch-config/propagate-dispatch-config` | 创建/传播 dispatch config |
+| `--iree-codegen-debug-patch-func-ops` | 调试用 func patch |
+| `--iree-codegen-decompose-affine-ops` | 分解 affine.apply |
+| `--iree-codegen-decompose-boundary-pack-unpack-ops` | 分解边界 pack/unpack |
+| `--iree-codegen-decompose-convolution-to-lower-dim-ops` | 卷积分解为低维操作 |
+| `--iree-codegen-decompose-linalg-generic` | 分解 linalg.generic |
+| `--iree-codegen-decompose-memrefs` | 分解 memref |
+| `--iree-codegen-decompose-pack-unpack-ops` | 分解 pack/unpack 为可向量化操作 |
+| `--iree-codegen-decompose-softmax` | 分解 softmax 为 linalg 序列 |
+| `--iree-codegen-drop-vector-unit-dims` | 丢弃向量单位维度 |
+| `--iree-codegen-emulate-narrow-type` | 用宽整数模拟窄整数 |
+| `--iree-codegen-erase-dead-alloc-and-stores` | 删除只有 store 使用的 alloc |
+| `--iree-codegen-erase-hal-descriptor-type-from-memref` | 擦除 HAL 描述符类型 |
+| `--iree-codegen-expand-gpu-ops` | 扩展高级 GPU 操作 |
+| `--iree-codegen-expand-strided-metadata` | 解析 memref 步长元数据 |
+| `--iree-codegen-fission-transfer-ops-in-control-flow` | 分裂传输操作支持预取 |
+| `--iree-codegen-flatten-memref-subspan` | 展平 n-D MemRef subspan |
+| `--iree-codegen-flatten-swizzle-hint-allocs` | 展平 swizzle_hint 分配 |
+| `--iree-codegen-fold-affinemin-in-distributed-loops` | 折叠分布式循环中的 affine.min |
+| `--iree-codegen-fold-memref-alias-ops` | 折叠 memref 别名操作 |
+| `--iree-codegen-fold-reshape-into-interface-tensor` | 折叠 reshape 到接口绑定 |
+| `--iree-codegen-fold-split-reduction-and-workgroup-mapping-loops` | 折叠拆分 reduction 循环 |
+| `--iree-codegen-fold-tensor-extract-op` | 折叠 tensor.extract |
+| `--iree-codegen-forall-to-for` | 转换 scf.forall 到 scf.for |
+| `--iree-codegen-fuse-tensor-pad-with-consumer` | 融合 tensor.pad 到 consumer |
+| `--iree-codegen-generic-vectorization` | 通用向量化 pass |
+| `--iree-codegen-hoist-inner-tiled-acc-reshapes` | 提升 inner_tiled 周围 reshape |
+| `--iree-codegen-hoist-statically-bound-allocations` | 提升静态界限 alloca |
+| `--iree-codegen-hoist-vector-extract-insert-slice` | 提升向量提取/插入对 |
+| `--iree-codegen-inject-assume-alignment` | 注入对齐假设 |
+| `--iree-codegen-insert-batch-dim-for-batchless-conv` | 为无 batch 卷积插入 batch 维度 |
+| `--iree-codegen-insert-smt-constraints` | 插入 SMT 约束 |
+| `--iree-codegen-instrument-memory-accesses` | 仪器化内存访问 |
+| `--iree-codegen-iree-bufferize-constants/comprehensive-bufferize` | Bufferize 常量/Linalg |
+| `--iree-codegen-link-tuning-specs` | 链接 tuning spec |
+| `--iree-codegen-lower-bitcode/memref/tensor-ukernels-to-calls` | 降低微内核 |
+| `--iree-codegen-lowering-config-interpreter` | 应用 lowering config 策略 |
+| `--iree-codegen-materialize-device/host-encoding` | 物化 tensor 编码 |
+| `--iree-codegen-materialize-encoding-into-nop` | 删除编码（nop） |
+| `--iree-codegen-materialize-tuning-specs` | 加载 tuning spec |
+| `--iree-codegen-materialize-user-configs` | 设置用户 lowering config |
+| `--iree-codegen-materialize-vector-masking/tile-sizes` | 物化向量掩码/尺寸 |
+| `--iree-codegen-math-transform` | 数学函数变换/近似 |
+| `--iree-codegen-memrefcopy-to-linalg` | memref.copy 转 linalg |
+| `--iree-codegen-normalize-loop-bounds` | 规范化循环边界 |
+| `--iree-codegen-optimize-tensor-insert-extract-slices` | 优化 tensor slice 操作 |
+| `--iree-codegen-optimize-vector-transfer` | 优化向量传输 |
+| `--iree-codegen-pad-dynamic-alloc` | 动态 alloc 转静态 |
+| `--iree-codegen-propagate-constant-offsets/dispatch-size-bounds` | 传播常量偏移/工作组边界 |
+| `--iree-codegen-propagate-reshapes-by-expansion` | 通过展开传播 reshape |
+| `--iree-codegen-reconcile-translation-info` | 合并翻译信息 |
+| `--iree-codegen-reinsert-swizzle-hints` | 重新插入 swizzle_hint |
+| `--iree-codegen-rematerialize-parallel-ops` | 重物化并行操作 |
+| `--iree-codegen-remove-index-hints/single-iteration-loop` | 移除索引提示/单迭代循环 |
+| `--iree-codegen-reorder-workgroups` | 重排工作组 ID 改善缓存 |
+| `--iree-codegen-replace-slow-min-max-ops` | 慢速 min/max 替换为快速版本 |
+| `--iree-codegen-resolve-swizzle-hints/workgroup-count-hints` | 解析 swizzle_hint/工作组计数提示 |
+| `--iree-codegen-specialize-exports` | 基于注解范围特化导出 |
+| `--iree-codegen-split-full-partial-transfer` | 拆分向量传输为快/慢路径 |
+| `--iree-codegen-strip-compilation-info` | 删除所有 lowering config 属性 |
+| `--iree-codegen-test-*` | 测试用 pass |
+| `--iree-codegen-tile-and-distribute-to-workgroups-using-forall-op` | 切分并分发到工作组 |
+| `--iree-codegen-tile-large-tensors` | 贪婪切分大 tensor |
+| `--iree-codegen-type-propagation` | 传播 tensor 类型避免非法 load/store |
+| `--iree-codegen-unroll-annotated-loops` | 展开标记的 scf.for 循环 |
+| `--iree-codegen-vector-reduction-to-gpu` | 向量 reduction 转 GPU |
+| `--iree-codegen-vector-transfer-lowering` | 降低传输操作到简单操作 |
+| `--iree-codegen-vectorize-memref-copy` | 向量化 memref 拷贝 |
+| `--iree-codegen-vectorize-tensor-pad` | 向量化 tensor.pad |
+| `--iree-codegen-verify-smt-constraints/workgroup-distribution` | 验证 |
+
+### 2.2 GPU Codegen
+| Pass | 功能 |
+|------|------|
+| `--iree-codegen-gpu-alloc-private-memory-for-dps-ops` | DPS 操作分配私有内存 |
+| `--iree-codegen-gpu-apply-padding-level/tiling-level` | 按 tiling config 填充/切分 |
+| `--iree-codegen-gpu-bubble-resource-casts` | 上冒 resource cast |
+| `--iree-codegen-gpu-check-resource-usage` | 检查 GPU 资源使用（共享内存限制） |
+| `--iree-codegen-gpu-combine-layout-transformation/value-semantic-barriers` | 合并布局变换/barrier |
+| `--iree-codegen-gpu-convert-to-coalesced-dma` | 转换为聚合 DMA |
+| `--iree-codegen-gpu-create-fast-slow-path` | 创建快/慢路径处理 padding |
+| `--iree-codegen-gpu-decompose-horizontally-fused-gemms` | 分解水平融合 GEMM |
+| `--iree-codegen-gpu-distribute/distribute-copy-using-forall/distribute-forall/distribute-scf-for/distribute-shared-memory-copy` | 各种 GPU 分发 pass |
+| `--iree-codegen-gpu-fuse-and-hoist-parallel-loops` | 融合提升并行循环 |
+| `--iree-codegen-gpu-fuse-subgroup-consumers` | 融合 subgroup consumer |
+| `--iree-codegen-gpu-generalize-named-ops` | 命名 Linalg 转 generic |
+| `--iree-codegen-gpu-greedily-distribute-to-threads` | 贪婪分发到线程 |
+| `--iree-codegen-gpu-infer-memory-space` | 推断 alloc_tensor 内存空间 |
+| `--iree-codegen-gpu-multi-buffering` | 多缓冲 |
+| `--iree-codegen-gpu-pack-partial-reductions` | 拆分 reduction 到 [outer, inner] |
+| `--iree-codegen-gpu-pack-to-intrinsics` | 打包 matmul 转内在函数 |
+| `--iree-codegen-gpu-pad-convs/pad-operands` | 填充卷积/操作数 |
+| `--iree-codegen-gpu-pipelining` | 软件流水线 |
+| `--iree-codegen-gpu-promote-matmul-operands` | 拷贝 matmul 操作数 |
+| `--iree-codegen-gpu-reduce-bank-conflicts` | 减少共享内存 bank 冲突 |
+| `--iree-codegen-gpu-reuse-shared-memory-allocs` | 复用共享内存分配 |
+| `--iree-codegen-gpu-tensor-alloc/tensor-tile/tile-and-convert-conv-to-matmul/tile-reduction/vector-alloc/verify-distribution` | GPU tensor 操作 |
+| `--iree-codegen-gpu-tile` | 切分 Linalg 到 GPU 调用 |
+| `--iree-codegen-gpu-tensor-tile-to-serial-loops` | reduction 维度串行切分 |
+| `--iree-codegen-gpu-vectorize-pipeline` | GPU 向量化 pipeline 标志 |
+
+### 2.3 LLVMCPU Codegen
+| Pass | 功能 |
+|------|------|
+| `--iree-llvmcpu-2d-scalable-to-1d-scalable` | 不支持的可扩展维度转循环 |
+| `--iree-llvmcpu-assign-constant/import-ordinals` | 分配常量/导入序号 |
+| `--iree-llvmcpu-check-ir-before-llvm-conversion` | 检查 LLVM 转换前 IR 约束 |
+| `--iree-llvmcpu-emit-vectorization-remarks` | 发射向量化备注 |
+| `--iree-llvmcpu-expand-f16-op-to-f32` | f16 操作展开为 f32 |
+| `--iree-llvmcpu-link-executables` | 链接 LLVMCPU executable |
+| `--iree-llvmcpu-lower-executable-target` | 使用 lowering pipeline 降低 executable |
+| `--iree-llvmcpu-mmt4d-vector-lowering` | 向量降低逻辑 |
+| `--iree-llvmcpu-peel` | 对非分布式循环进行 peeling |
+| `--iree-llvmcpu-select-lowering-strategy` | 选择 CPU lowering pipeline |
+| `--iree-llvmcpu-split-reduction` | 拆分 reduction |
+| `--iree-llvmcpu-synchronize-symbol-visibility` | 同步 LLVM 链接与 MLIR 可见性 |
+| `--iree-llvmcpu-tile` | 切分 TilingInterface 操作 |
+| `--iree-llvmcpu-tile-and-fuse-producer-consumer` | 切分根操作并融合 producer/consumer |
+| `--iree-llvmcpu-tile-to-vector-size` | 切分到目标向量大小 |
+| `--iree-llvmcpu-unfuse-fma-pass` | 拆散 llvm.fma |
+| `--iree-llvmcpu-vector-contract-custom-kernels` | 启用自定义 vector.contract 内核 |
+| `--iree-llvmcpu-vector-shape-cast/vector-transpose-lowering` | 向量 shape cast / transpose 降低 |
+| `--iree-llvmcpu-verify-linalg-transform-legality/vector-size-legality` | 验证 |
+| `--iree-llvmcpu-virtual-vector-lowering` | 高层向量操作降低 |
+
+### 2.4 LLVMGPU Codegen
+| Pass | 功能 |
+|------|------|
+| `--iree-llvmgpu-1d-vector-canonicalizations` | 1-D 向量规范化 |
+| `--iree-llvmgpu-assign-constant-ordinals` | 分配常量序号 |
+| `--iree-llvmgpu-cast-address-space-function` | 转换调用/函数的地址空间 |
+| `--iree-llvmgpu-configure-tensor-layouts` | 设置 tensor 布局 |
+| `--iree-llvmgpu-legalize-nd-vectors` | n-D 向量合法化为 1-D |
+| `--iree-llvmgpu-link-executables` | 链接 LLVMGPU executable |
+| `--iree-llvmgpu-lower-executable-target` | 降低 executable target |
+| `--iree-llvmgpu-pack-shared-memory-alloc` | 打包共享内存分配减少使用 |
+| `--iree-llvmgpu-prefetch-shared-memory` | 预取共享内存流水线 |
+| `--iree-llvmgpu-select-lowering-strategy` | 选择 GPU lowering pipeline |
+| `--iree-llvmgpu-tensorcore-vectorization` | 转换为向量形式用于 GPU MMA |
+| `--iree-llvmgpu-tile-and-distribute` | 切分并分发 workgroup 内操作 |
+| `--iree-llvmgpu-vector-distribute/vector-lowering/vector-to-gpu` | 向量分发/降低/转 GPU |
+
+### 2.5 SPIR-V Codegen
+| Pass | 功能 |
+|------|------|
+| `--iree-spirv-annotate-winograd-loops` | 注解 Winograd 最内层循环 |
+| `--iree-spirv-breakdown-large-vector` | 分解 SPIR-V 不支持的大向量 |
+| `--iree-spirv-convert-gpu-target` | 转换 iree_gpu.target 到 spirv.target_env |
+| `--iree-spirv-emulate-i64` | 用 32-bit 模拟 64-bit 整数 |
+| `--iree-spirv-erase-storage-buffer-static-shape` | 静态 shape storage buffer 转动态 |
+| `--iree-spirv-final/initial-vector-lowering` | 向量最终/初始降低 |
+| `--iree-spirv-link-executables` | 链接 SPIR-V executable |
+| `--iree-spirv-lower-executable-target-pass` | 降低 executable target 到 SPIR-V |
+| `--iree-spirv-lower-executable-using-transform-dialect` | 使用 transform dialect 降低 |
+| `--iree-spirv-map-memref-storage-class` | 映射 MemRef 到 SPIR-V 存储类 |
+| `--iree-spirv-materialize-executable-conditions` | 物化 SPIR-V 目标需求条件 |
+| `--iree-spirv-select-lowering-strategy-pass` | 选择 SPIR-V lowering 策略 |
+| `--iree-spirv-tile-and-distribute` | 切分分发 buffer 语义 Linalg |
+| `--iree-spirv-tile-and-promote` | 切分提升 Linalg 到 workgroup 内存 |
+| `--iree-spirv-tile-to-cooperative-ops` | 切分到 subgroup 并向量化 |
+| `--iree-spirv-trim-executable-target-env` | 裁剪 SPIR-V 目标环境到最小需求 |
+| `--iree-spirv-vector-to-gpu-subgroup-mma-ops` | 向量转 GPU subgroup MMA |
+| `--iree-spirv-vectorize-load-store` | 向量化 memref 加载/存储 |
+| `--iree-spirv-vectorize-to-cooperative-ops` | 切分并向量化到 cooperative 操作 |
+
+### 2.6 VMVX Codegen
+| Pass | 功能 |
+|------|------|
+| `--iree-vmvx-assign-constant-ordinals` | 分配常量序号 |
+| `--iree-vmvx-conversion` | 转换到 VMVX dialect |
+| `--iree-vmvx-link-executables` | 链接 VMVX executable |
+| `--iree-vmvx-lower-executable-target` | 降低 executable target |
+| `--iree-vmvx-lower-linalg-microkernels` | 降低 linalg 到 VMVX 微内核 |
+| `--iree-vmvx-materialize-constants` | 物化可执行常量 |
+| `--iree-vmvx-resolve-buffer-descriptors` | 解析 buffer 描述符 |
+| `--iree-vmvx-select-lowering-strategy` | 选择 lowering 策略 |
+
+### 2.7 ROCm/AMDGPU Codegen
+| Pass | 功能 |
+|------|------|
+| `--iree-rocdl-annotate-kernel-for-translation` | 翻译前设置函数属性 |
+| `--iree-rocdl-buffer-instructions-optimization` | buffer 指针优化 |
+| `--iree-rocdl-configure-buffer-instructions` | 确定 buffer 指针子跨度 |
+| `--iree-rocdl-load-to-transpose-load` | 向量化读取转 transpose_load |
+| `--iree-codegen-amdgpu-lower-coalesced-dma-to-gather-lds` | DMA 降低到 gather_to_lds |
+
+---
+
+## 三、IREE 全局优化 Pass
+
+| Pass | 功能 |
+|------|------|
+| `--iree-global-opt-cleanup-numeric-narrowing` | 清理数值收窄 |
+| `--iree-global-opt-convert-conv2d-to-img2col` | 卷积转 img2col + matmul |
+| `--iree-global-opt-convert-strided-contraction-to-contraction` | 从步长 contraction 提取 slice |
+| `--iree-global-opt-data-layout-propagation` | 传播 pack/unpack 改善融合 |
+| `--iree-global-opt-decompose-concat` | 分解 concatenation |
+| `--iree-global-opt-demote-contraction-inputs` | contraction 输入降级到窄类型（f32→f16/bf16） |
+| `--iree-global-opt-detach-elementwise-from-named-ops` | 从命名 Linalg 分离 elementwise |
+| `--iree-global-opt-erase-unused-linalg-operands` | 删除未使用 linalg 操作数 |
+| `--iree-global-opt-expand-tensor-shapes` | 展开 tensor shape 维度为 SSA |
+| `--iree-global-opt-fuse-dequantization-matmul` | 融合反量化和 matmul |
+| `--iree-global-opt-generalize-linalg-named-ops` | Linalg 命名操作转 generic |
+| `--iree-global-opt-infer-numeric-narrowing` | 推断并插入数值收窄注解 |
+| `--iree-global-opt-loop-invariant-code-motion` | 循环不变代码外提 |
+| `--iree-global-opt-materialize-homogeneous-encodings` | 单目标时物化物理 encoding |
+| `--iree-global-opt-optimize-numerics` | 基于注解优化数值 |
+| `--iree-global-opt-propagate-linalg-transpose` | 传播 linalg.transpose |
+| `--iree-global-opt-quantized-conv-to-conv/matmul-to-matmul` | 量化 op 降低 |
+| `--iree-global-opt-raise-special-ops` | 提升 softmax 等为高层 linalg.ext |
+| `--iree-global-opt-remove-zero-extent-tensors` | 删除零宽度 tensor |
+| `--iree-global-opt-simplify-pack-unpack` | 简化 pack/unpack |
+| `--iree-global-opt-warn-on-uninitialized-values` | 警告未初始化值使用 |
+
+---
+
+## 四、IREE 预处理 Pass
+
+| Pass | 功能 |
+|------|------|
+| `--iree-preprocessing-apply-pdl-patterns` | 应用 PDL 模式 |
+| `--iree-preprocessing-attr-based-pipeline` | 运行属性指定的 pipeline |
+| `--iree-preprocessing-convert-1x1-filter-conv2d-to-matmul` | 1x1 卷积转 matmul |
+| `--iree-preprocessing-convert-conv-filter/channels-last` | 卷积滤镜/通道布局转换 |
+| `--iree-preprocessing-convert-strided-insert-slice-to-generic` | 转换 strided insert_slice |
+| `--iree-preprocessing-fold-attention-with-transpose` | 折叠 attention + transpose |
+| `--iree-preprocessing-generalize-linalg-matmul-experimental` | matmul 转 generic（实验） |
+| `--iree-preprocessing-make-single-dispatch-for-function` | 整个函数合并为单个 dispatch |
+| `--iree-preprocessing-pad-linalg-ops` | 按指定大小填充 linalg |
+| `--iree-preprocessing-pad-to-intrinsics` | 填充以匹配目标内在函数 |
+| `--iree-preprocessing-swap-strided-insert-slice-with-contraction` | 交换 1x1 反向卷积操作顺序 |
+| `--iree-preprocessing-transform-interpreter` | transform dialect 解释器 |
+| `--iree-preprocessing-transpose-matmul-pass` | 转置 matmul |
+
+---
+
+## 五、IREE 输入转换 Pass（前端）
+
+### 5.1 StableHLO 输入
+| Pass | 功能 |
+|------|------|
+| `--iree-stablehlo-canonicalize` | 规范化 StableHLO 操作 |
+| `--iree-stablehlo-legalize-control-flow` | 控制流转 SCF |
+| `--iree-stablehlo-legalize-custom-calls` | 特化 custom calls 分解 |
+| `--iree-stablehlo-legalize-shape-computations` | shape 操作转 core-mlir |
+| `--iree-stablehlo-preprocessing-*` | 各种预处理（dot-general、einsum、gather、complex、batch-norm、tuple flattening） |
+| `--iree-stablehlo-to-iree-input` | StableHLO 转 IREE 输入 dialect |
+| `--iree-stablehlo-to-linalg-ext` | StableHLO 转 LinalgExt |
+| `--iree-stablehlo-to-stablehlo-preprocessing` | IREE 专属 StableHLO 预处理 |
+| `--iree-stablehlo-verify-compiler-input-legality` | 验证编译器输入合法性 |
+
+### 5.2 Torch 输入
+| Pass | 功能 |
+|------|------|
+| `--torch-adjust-calling-conventions` | 调整调用约定 |
+| `--torch-convert-custom-quant-op` | 自定义量化操作转换 |
+| `--torch-decompose-complex-ops` | 分解复杂 torch 操作 |
+| `--torch-drop-abstract-interp-calculations` | 删除抽象解释计算 |
+| `--torch-erase-module-initializer` | 擦除模块初始化器 |
+| `--torch-finalizing/backend-type-conversion` | 完成 builtin tensor 转换 |
+| `--torch-fuse-quantized-ops` | QDQ 序列融合 |
+| `--torch-globalize-object-graph` | 对象图全局化 |
+| `--torch-inline-global-slots` | 内联 global_slot |
+| `--torch-iree-*` | Torch→IREE 专属转换 |
+| `--torch-lower-to-backend-contract` | 简化到后端约定 |
+| `--torch-match-quantized-custom-ops` | 匹配量化操作 |
+| `--torch-maximize-value-semantics` | 尽可能使用 value-semantic tensor |
+| `--torch-recompose/reduce/refine/reify/simplify/*` | 各种 Torch IR 变换 |
+| `--torch-to-iree` | Torch→IREE 完整 pipeline |
+| `--torch-verify-backend-contract-*` | 验证后端约定 |
+
+### 5.3 TOSA 输入
+| Pass | 功能 |
+|------|------|
+| `--iree-tosa-convert-i48-to-i64` | i48 转 i64 |
+| `--iree-tosa-strip-signedness` | 去除有符号性 |
+| `--iree-tosa-to-linalg-ext` | TOSA 转 linalg-ext |
+| `--iree-tosa-verify-compiler-input-legality` | 验证编译器输入 |
+| `--tosa-to-arith/linalg/tensor` | TOSA 标准降低 pass |
+
+### 5.4 其他输入
+| Pass | 功能 |
+|------|------|
+| `--iree-import-ml-program` | MLProgram 转 IREE 等价物 |
+| `--iree-import-public` | IREE public dialect 转 internal |
+| `--iree-simpleio-legalize` | 合法化 simpleio 示例操作 |
+| `--iree-tflite-wrap-entry-points` | TFLite C 绑定包装 |
+| `--convert-torch-conversion-to-mlprogram` | TorchConversion 转 MLProgram |
+| `--convert-torch-onnx-to-torch` | ONNX 自定义操作转 native torch |
+| `--convert-torch-to-arith/linalg/scf/tensor/tmtensor` | Torch 操作转标准 dialect |
+| `--chlo-legalize-to-stablehlo` | CHLO 转 StableHLO |
+| `--iree-convert-bf16-arith-to-f32` | bf16 算术转 f32 |
+| `--iree-convert-unsupported-float-arith` | 模拟不支持的浮点类型（fp8） |
+| `--iree-convert-accgemm-to-gemm` | 累积 GEMM 转 GEMM |
+
+---
+
+## 六、IREE 终 lowering Pass（到 LLVM/VM）
+
+| Pass | 功能 |
+|------|------|
+| `--iree-convert-to-llvm` | Linalg/HAL/Shape/Vector/Standard → LLVMIR |
+| `--iree-convert-to-nvvm` | builtin/GPU/HAL → LLVM + NVVM |
+| `--iree-convert-to-rocdl` | builtin/GPU/HAL → LLVM + ROCDL |
+| `--iree-convert-to-spirv` | 最终转换到 SPIR-V dialect |
+| `--iree-convert-vm-to-emitc` | VM 操作转 EmitC |
+| `--iree-top-level-scf-to-cfg` | 顶层 SCF 转 CFG |
+
+---
+
+## 七、IREE 扩展 Dialect Pass
+
+### 7.1 iree_linalg_ext
+| Pass | 功能 |
+|------|------|
+| `--iree-linalg-ext-convert-attention-to-online-attention` | attention 转 online_attention |
+| `--iree-linalg-ext-convert-conv-to-im2col-op/conv2d-to-winograd` | 卷积转 im2gemm/Winograd |
+| `--iree-linalg-ext-decompose-aggregated-ops/attention/im2col/map_store/winograd` | 各种分解 pass |
+| `--iree-linalg-ext-fold-unit-extent-dims` | 折叠单位维度 |
+| `--iree-linalg-ext-test-reshape-fusion` | 测试 reshape 融合 |
+| `--iree-linalg-ext-to-loops` | LinalgExt 操作转循环 |
+| `--iree-linalg-ext-topk-split-reduction` | Topk 拆分 reduction |
+| `--iree-linalg-pad-contraction-to-block-size` | contraction 按块大小填充 |
+
+### 7.2 iree_gpu
+| Pass | 功能 |
+|------|------|
+| `--iree-gpu-convert-forall-to-generic-nest` | forall 转 pcf.generic |
+| `--iree-gpu-distribute-inner-tiled-to-lanes` | inner_tiled 分发到 lane |
+| `--iree-gpu-expand-undistributed-inner-tiles` | 展开 inner_tiled 内部维度 |
+| `--iree-gpu-lower-ops` | bufferize 后 iree_gpu 降低 |
+| `--iree-gpu-unroll-to-intrinsics` | 展开 multi_mma 到内部向量大小 |
+
+### 7.3 iree_pcf（并行控制流）
+| Pass | 功能 |
+|------|------|
+| `--iree-pcf-convert-sref-to-memref` | pcf.sref 转 memref |
+| `--iree-pcf-fuse-consumers/pcf-writes/producers` | 融合 pcf 操作 |
+| `--iree-pcf-lower-structural-pcf` | pcf 转 scf |
+| `--iree-pcf-resolve-tokens` | 解析 pcf.sref 同步 |
+
+### 7.4 iree_vector_ext
+| Pass | 功能 |
+|------|------|
+| `--iree-vector-ext-fold-unit-extent-dims` | 折叠单位维度 |
+| `--iree-vector-ext-lower-transfer-gather-scatter-to-vector` | transfer_gather/scatter 转 vector |
+
+### 7.5 iree_tensor_ext
+| Pass | 功能 |
+|------|------|
+| `--iree-eliminate-empty-tensors` | 消除 tensor.empty 避免 buffer 分配 |
+| `--iree-tensor-ext-test-sparse-op-interface-methods` | 测试稀疏操作接口 |
+
+---
+
+## 八、MLIR Upstream Pass
+
+### 8.1 Affine Dialect
+| Pass | 功能 |
+|------|------|
+| `--affine-data-copy-generate` | 生成显式 affine 内存拷贝 |
+| `--affine-expand-index-ops` | affine index 操作降低 |
+| `--affine-fold-memref-alias-ops` | 折叠 memref 别名 |
+| `--affine-loop-coalescing` | 嵌套循环合并为单循环 |
+| `--affine-loop-fusion` | affine 循环融合 |
+| `--affine-loop-invariant-code-motion` | 循环不变代码外提 |
+| `--affine-loop-normalize` | 仿射循环规范化 |
+| `--affine-loop-tile` | 仿射循环切分 |
+| `--affine-loop-unroll` | 仿射循环展开 |
+| `--affine-loop-unroll-jam` | 仿射循环 unroll-and-jam |
+| `--affine-parallelize` | for 转 parallel |
+| `--affine-pipeline-data-transfer` | 流水线化数据传输 |
+| `--affine-raise-from-memref` | memref 操作提升为 affine |
+| `--affine-scalrep` | 标量替换 affine 访存 |
+| `--affine-simplify-min/max` | 简化 min/max/apply |
+| `--affine-simplify-structures` | 简化仿射表达式 |
+| `--affine-simplify-with-bounds` | 利用值界简化索引 |
+| `--affine-super-vectorize` | 向量化到目标无关 n-D 抽象 |
+
+### 8.2 Bufferization
+| Pass | 功能 |
+|------|------|
+| `--one-shot-bufferize` | 一次性 bufferize |
+| `--buffer-deallocation-simplification` | 优化 dealloc 操作 |
+| `--buffer-hoisting` | 分配操作提升到公共支配点 |
+| `--buffer-loop-hoisting` | 分配操作提出循环 |
+| `--buffer-results-to-out-params` | memref 返回值转 out-params |
+| `--bufferization-lower-deallocations` | bufferization.dealloc 转 memref.dealloc |
+| `--ownership-based-buffer-deallocation` | 基于所有权的 buffer 释放 |
+| `--promote-buffers-to-stack` | 堆分配提升到栈分配 |
+| `--optimize-allocation-liveness` | 优化临时分配活性 |
+
+### 8.3 Linalg Dialect
+| Pass | 功能 |
+|------|------|
+| `--linalg-block-pack-matmul` | matmul 分块布局转换 |
+| `--linalg-fold-into-elementwise` | 将 transpose/broadcast 折叠到 elementwise |
+| `--linalg-fold-unit-extent-dims` | 移除单位维度 |
+| `--linalg-fuse-elementwise-ops` | elementwise 操作融合 |
+| `--linalg-generalize-named-ops` | 命名操作转 generic |
+| `--linalg-inline-scalar-operands` | 内联标量操作数 |
+| `--linalg-morph-ops` | linalg 操作形态转换 |
+| `--linalg-specialize-generic-ops` | generic 转回命名操作 |
+| `--convert-linalg-to-affine-loops` | Linalg 转仿射循环 |
+| `--convert-linalg-to-loops` | Linalg 转循环 |
+| `--convert-linalg-to-parallel-loops` | Linalg 转并行循环 |
+| `--convert-elementwise-to-linalg` | ElementwiseMappable 转 linalg |
+
+### 8.4 Vector Dialect
+Vector 相关 pass 主要整合在 iree-codegen 中。
+
+### 8.5 GPU Dialect
+| Pass | 功能 |
+|------|------|
+| `--gpu-async-region` | GPU 操作异步化 |
+| `--gpu-decompose-memrefs` | 分解 memref 索引计算 |
+| `--gpu-eliminate-barriers` | 删除不必要 barrier |
+| `--gpu-kernel-outlining` |  outlining gpu.launch body |
+| `--gpu-launch-sink-index-computations` | 下沉索引计算到 gpu.launch |
+| `--gpu-map-parallel-loops` | 映射循环到 GPU 硬件维度 |
+| `--gpu-module-to-binary` | GPU 模块转二进制 |
+
+### 8.6 SCF / CF / Control Flow
+| Pass | 功能 |
+|------|------|
+| `--convert-scf-to-cf` | SCF 转 ControlFlow |
+| `--scf-parallel-loop-fusion` | 相邻并行循环融合 |
+| `--scf-parallel-loop-tiling` | 并行循环切分 |
+| `--loop-invariant-code-motion` | 循环不变代码外提 |
+
+### 8.7 MemRef Dialect
+| Pass | 功能 |
+|------|------|
+| `--memref-elide-reinterpret-cast` | 消除冗余 reinterpret_cast |
+| `--memref-emulate-wide-int` | 用 N-bit 模拟 2N-bit 整数 |
+| `--memref-expand` | memref 操作合法化到 LLVM |
+| `--normalize-memrefs` | 规范化 memref |
+| `--flatten-memref` | 多维 memref 展平到 1-D |
+| `--fold-memref-alias-ops` | 折叠 memref 别名到 load/store |
+| `--expand-realloc` | realloc 展开为组件 |
+| `--expand-strided-metadata` | 展开 strided metadata |
+| `--drop-equivalent-buffer-results` | 删除等价于 bbArg 的返回值 |
+
+### 8.8 Transform Dialect
+| Pass | 功能 |
+|------|------|
+| `--transform-dialect-check-uses` | 检查潜在 use-after-free |
+| `--transform-dialect-drop-schedule` | 删除 schedule |
+| `--transform-infer-effects` | 推断 transform 副作用 |
+| `--transform-interpreter` | transform dialect 解释器 |
+| `--transform-preload-library` | 预加载 transform 库 |
+| `--iree-transform-dialect-interpreter` | IREE 版 transform 解释器 |
+
+### 8.9 其他 MLIR Upstream
+| Pass | 功能 |
+|------|------|
+| `--canonicalize` | 操作规范化 |
+| `--cse` | 公共子表达式消除 |
+| `--inline` | 函数内联 |
+| `--symbol-dce` | 消除死符号 |
+| `--strip-debuginfo` | 剥离调试信息 |
+| `--lower-affine` | Affine 转 Arith + SCF |
+| `--shape-to-shape-lowering` | Shape 转 Arith |
+| `--resolve-ranked-shaped-type-result-dims` | 解析 ranked shape 结果维度 |
+| `--reconcile-unrealized-casts` | 简化未实现转换 casts |
+| `--reify-result-shapes` | 具体化 PadOp/ConcatOp 结果 |
+| `--snapshot-op-locations` | 从当前 IR 生成新位置信息 |
+| `--print-op-stats` | 打印操作统计 |
+| `--view-op-graph` | 打印 Graphviz 可视化 |
+| `--outline-shape-computation` | 用 shape.func 保存形状计算 |
+
+---
+
+## 九、Target Attach 和 Backend Pass
+
+| Pass | 功能 |
+|------|------|
+| `--nvvm-attach-target` | 附加 NVVM 目标属性到 GPU Module |
+| `--rocdl-attach-target` | 附加 ROCDL 目标属性到 GPU Module |
+| `--spirv-attach-target` | 附加 SPIR-V 目标属性到 GPU Module |
+| `--xevm-attach-target` | 附加 XeVM 目标属性到 GPU Module |
+
+---
+
+## 十、调试 / 测试 / 分析 Pass
+
+| Pass | 功能 |
+|------|------|
+| `--test-arm-sme-tile-allocation` | 测试 SME tile 分配 |
+| `--test-iree-vm-live-intervals` | 测试活跃区间分析 |
+| `--test-iree-vm-register-allocation` | 测试寄存器分配 |
+| `--test-iree-vm-value-liveness` | 测试值活性分析 |
+| `--iree-test-llvmgpu-legalize-ops` | 测试合法化模式 |
+| `--iree-codegen-test-*` | Codegen 各类测试 pass |
+| `--iree-pcf-test-*` | PCF 测试 pass |
+| `--iree-util-test-*` | Util 测试 pass（转换、浮点范围、整数整除性分析） |
+
+---
+
+## 十一、LLVM 后端 Pass
+
+来自 LLVM 基础设施的大量优化选项，包括：
+- **Cost model**: `--cost-kind`, `--intrinsic-cost-strategy`
+- **Inlining**: `--inlining-threshold`, `--max-iterations`
+- **InstCombine**: `--instcombine-*` 系列
+- **GVN**: `--enable-gvn-hoist/sink/memoryssa`
+- **Loop 优化**: 循环向量化、展开、交织、尾折叠
+- **Profile/PGO**: `--pgo-*`, `--sample-profile-*`, `--instrprof-*`
+- **LTO/ThinLTO**: `--lto-embed-bitcode`, `--thinlto-assume-merged`
+- **代码发射**: NEON 风格、Arm 属性、x86 分支对齐、RISC-V 属性
+- **安全**: `--bounds-checking-single-trap`, `--hwasan-*`
+
+---
+
+## 十二、Pass Pipelines（Pipeline 总览）
+
+### 12.1 全局 Pipeline
+| Pipeline | 功能 |
+|----------|------|
+| `--iree-transformation-pipeline` | IREE 输入→VM 完整变换流程 |
+| `--iree-common-input-transformation-pipeline` | 公共输入变换 pipeline |
+| `--iree-vm-transformation-pipeline` | VM dialect 完整变换 |
+
+### 12.2 输入 Pipeline
+| Pipeline | 功能 |
+|----------|------|
+| `--iree-stablehlo-input-transformation-pipeline` | StableHLO 输入变换 |
+| `--iree-tosa-input-transformation-pipeline` | TOSA 输入变换 |
+| `--torch-to-iree` | Torch→IREE pipeline |
+| `--torch-function-to-torch-backend-pipeline` | Torch 函数到后端 |
+| `--torch-backend-to-linalg-on-tensors-backend-pipeline` | Torch 后端到 linalg |
+| `--torch-simplification-pipeline` | Torch 简化 |
+| `--torch-shape-refinement-pipeline` | Torch 形状精炼 |
+| `--torch-onnx-to-torch-backend-pipeline` | ONNX→Torch 后端 |
+| `--torchdynamo-export-to-torch-backend-pipeline` | TorchDynamo→Torch 后端 |
+| `--torchscript-module-to-torch-backend-pipeline` | TorchScript→Torch 后端 |
+| `--iree-tflite-transform-pipeline` | TFLite 绑定支持 |
+| `--iree-abi-transformation-pipeline` | IREE native ABI 绑定 |
+
+### 12.3 Flow / Dispatch Pipeline
+| Pipeline | 功能 |
+|----------|------|
+| `--iree-flow-transformation-pipeline` | Flow dialect 完整变换 |
+| `--iree-dispatch-creation-pipeline` | 形成 dispatch 区域 |
+| `--iree-dispatch-creation-preprocessing-pipeline` | Dispatch 前预处理 |
+
+### 12.4 全局优化 Pipeline
+| Pipeline | 功能 |
+|----------|------|
+| `--iree-global-optimization-transformation-pipeline` | 全局优化变换 |
+| `--iree-global-optimization-hoist-constant-expressions` | 提升常量表达式 |
+
+### 12.5 HAL Pipeline
+| Pipeline | 功能 |
+|----------|------|
+| `--iree-hal-transformation-pipeline` | HAL 完整转换/降低 |
+| `--iree-hal-configuration-pipeline` | HAL 目标配置 |
+| `--iree-hal-device-assignment-pipeline` | HAL 设备分配 |
+| `--iree-hal-inline-static/dynamic-transformation-pipeline` | Inline HAL 变换 |
+
+### 12.6 Stream Pipeline
+| Pipeline | 功能 |
+|----------|------|
+| `--iree-stream-transformation-pipeline` | Stream 完整变换 |
+| `--iree-stream-tensor-transformation-pipeline` | source→stream.tensor |
+| `--iree-stream-async-transformation-pipeline` | stream.tensor→stream.async |
+| `--iree-stream-cmd-transformation-pipeline` | stream.async→stream.cmd |
+| `--iree-stream-cleanup-pipeline` | Stream 阶段间清理 |
+| `--iree-stream-optimization-pipeline` | Stream 命令优化 |
+
+### 12.7 Codegen Pipeline
+| Pipeline | 功能 |
+|----------|------|
+| `--iree-codegen-configuration-preprocessing-pipeline` | Codegen 配置前预处理 |
+| `--iree-codegen-translation-postprocessing-pipeline` | Codegen 翻译后处理 |
+
+#### LLVMCPU Pipeline
+| Pipeline | 功能 |
+|----------|------|
+| `--iree-codegen-llvmcpu-configuration-pipeline` | CPU lowering 策略配置 |
+| `--iree-codegen-llvmcpu-lowering-pipeline` | LLVMCPU 降低流程 |
+| `--iree-codegen-llvmcpu-bufferization-pipeline` | CPU bufferization |
+| `--iree-codegen-llvmcpu-vector-lowering-pipeline` | CPU 向量降低 |
+| `--iree-codegen-llvmcpu-linking-pipeline` | LLVMCPU executable 链接 |
+
+#### LLVMGPU Pipeline
+| Pipeline | 功能 |
+|----------|------|
+| `--iree-codegen-llvmgpu-configuration-pipeline` | GPU lowering 策略配置 |
+| `--iree-codegen-llvmgpu-bufferization-pipeline` | GPU bufferization |
+| `--iree-codegen-llvmgpu-linking-pipeline` | LLVMGPU executable 链接 |
+| `--iree-codegen-llvmgpu-nvvm-lowering-pipeline` | NVVM 降低流程 |
+| `--iree-codegen-llvmgpu-rocdl-lowering-pipeline` | ROCDL 降低流程 |
+| `--iree-codegen-lower-to-rocm-gpu` | Linalg→ROCDL 降低 |
+
+#### SPIR-V Pipeline
+| Pipeline | 功能 |
+|----------|------|
+| `--iree-codegen-spirv-configuration-pipeline` | SPIR-V lowering 配置 |
+| `--iree-codegen-linalg-to-spirv-pipeline` | Linalg→SPIR-V 渐进降低 |
+
+#### VMVX Pipeline
+| Pipeline | 功能 |
+|----------|------|
+| `--iree-codegen-vmvx-configuration-pipeline` | VMVX 配置 |
+| `--iree-codegen-vmvx-linking-pipeline` | VMVX executable 链接 |
+| `--iree-codegen-vmvx-lowering-pipeline` | VMVX 降低 |
+| `--iree-vmvx-transformation-pipeline` | VMVX 完整变换 |
+
+### 12.8 预处理 Pipeline
+| Pipeline | 功能 |
+|----------|------|
+| `--iree-preprocessing-backward-data-conv-pipeline` | 反向数据卷积 |
+| `--iree-preprocessing-make-single-dispatch` | 单 dispatch 化 |
+| `--iree-preprocessing-transpose-convolution-pipeline` | 卷积转置规范化 |
+
+---
+
+## 十三、MLIR/编译器通用选项
+
+### 打印/调试
+| 选项 | 功能 |
+|------|------|
+| `--mlir-print-ir-before/after[-all]` | 打印 pass 前/后的 IR |
+| `--mlir-print-ir-before/after=<pass>` | 打印特定 pass 前后的 IR |
+| `--mlir-print-ir-after-change/failure` | 仅在变更/失败时打印 |
+| `--mlir-print-ir-module-scope` | 总是打印顶层模块 |
+| `--mlir-pass-statistics` | 显示每个 pass 的统计 |
+| `--mlir-pass-statistics-display=list/pipeline` | 统计显示方式 |
+| `--mlir-timing` | 显示执行时间 |
+| `--mlir-timing-display=list/tree` | 时间显示方式 |
+| `--mlir-diagnostic-verbosity-level` | 诊断信息详细程度 |
+| `--mlir-print-op-on-diagnostic` | 诊断时附带打印操作 |
+| `--mlir-print-stacktrace-on-diagnostic` | 诊断时附带堆栈 |
+| `--mlir-print-debuginfo/pretty-debuginfo` | 打印调试信息 |
+| `--mlir-disable-threading` | 禁用多线程 |
+| `--mlir-pass-pipeline-crash-reproducer` | 崩溃时生成复现器 |
+| `--mlir-generate-reproducer` | 生成复现器 |
+| `--verify-each` | 每个变换 pass 后运行验证器 |
+| `--verify-region-info` | 验证区域信息 |
+| `--verify-diagnostics` | 验证诊断匹配 |
+| `--verify-roundtrip` | 解析后往返验证 |
+| `--dump-pass-pipeline` | 打印将运行的 pipeline |
+| `--list-passes` | 打印已注册 pass 列表 |
+| `--show-dialects` | 打印已注册 dialect 列表 |
+
+### Pass 执行控制
+| 选项 | 功能 |
+|------|------|
+| `--pass-pipeline=<string>` | 指定运行的 pass pipeline 描述 |
+| `--split-input-file` | 分割输入文件分批处理 |
+| `--verify-each` | 每个 pass 后验证 |
+
+### 目标/后端配置
+| 选项 | 功能 |
+|------|------|
+| `--iree-hal-target-backends` | 目标后端 |
+| `--iree-hal-target-device` | 目标设备规格 |
+| `--iree-hal-executable-debug-level` | 可执行调试级别 (0-3) |
+| `--iree-hal-dump-executable-*` | 导出可执行源码/中间产物/二进制 |
+| `--iree-llvmcpu-target-triple/CPU/ABI/features` | LLVMCPU 目标配置 |
+| `--iree-llvmcpu-sanitize=address/thread` | LLVM 安全检测 |
+| `--iree-llvmcpu-loop-interleaving/unrolling/vectorization/slp` | LLVM 循环优化 |
+| `--iree-vm-target-extension-f32/f64` | VM 浮点扩展支持 |
+| `--iree-vm-target-index-bits` | VM index 位宽 |
+| `--iree-opt-level` | 全局优化级别 |
+
+---
+
+## 十四、如何追踪 Pass 执行顺序
+
+想逐个阅读 pass 了解其在干什么，有以下几种方法：
+
+### 方法一：命令行打印 IR 变化（推荐入门用）
+
+用 `--mlir-print-ir-before-all` 和 `--mlir-print-ir-after-all` 可以看到每个 pass 前后的 IR 变化：
+
+```bash
+# 查看每个 pass 前后的 IR（输出量很大）
+iree-opt input.mlir \
+  --iree-transformation-pipeline \
+  --mlir-print-ir-before-all \
+  --mlir-print-ir-after-all \
+  --mlir-print-ir-after-change 2>&1 | less
+
+# 只看某个特定 pass 前后的 IR
+iree-opt input.mlir \
+  --iree-transformation-pipeline \
+  --mlir-print-ir-before=canonicalize \
+  --mlir-print-ir-after=canonicalize 2>&1 | less
+
+# 打印 pass 统计信息（了解每个 pass 做了多少事）
+iree-opt input.mlir \
+  --iree-transformation-pipeline \
+  --mlir-pass-statistics 2>&1
+
+# 打印 pass 执行时间
+iree-opt input.mlir \
+  --iree-transformation-pipeline \
+  --mlir-timing 2>&1
+```
+
+输出中每个 pass 前会打印 `// *** IR Dump Before <pass-name> ***`，你可以按此关键字浏览。
+
+### 方法二：使用 `--dump-pass-pipeline` 预览完整 pipeline
+
+```bash
+# 打印 iree-transformation-pipeline 包含的所有 pass
+iree-opt --dump-pass-pipeline --pass-pipeline="builtin.module(iree-transformation-pipeline)" 2>&1
+
+# 打印某个子 pipeline 的 pass
+iree-opt --dump-pass-pipeline --pass-pipeline="builtin.module(iree-flow-transformation-pipeline)" 2>&1
+```
+
+这会输出 pipeline 中每个 pass 的名称和参数，但不会显示 IR 内容。
+
+### 方法三：阅读源码中的 Pipeline 定义（最权威）
+
+IREE 的完整 pass 执行顺序定义在源码中。核心文件：
+
+**主 pipeline 入口：**
+`compiler/src/iree/compiler/Pipelines/Pipelines.cpp`
+
+从源码可看到 pass 的执行顺序（phase）为：
+
+```
+Input → ABI → Preprocessing → GlobalOptimization
+  → DispatchCreation → Flow → Stream
+    → HAL → VM
+```
+
+每个 phase 内部又调用各自的 build pipeline 函数：
+
+| Phase | 构建函数 | 源码位置 |
+|-------|---------|---------|
+| Input | `InputConversion::buildCommonInputConversionPassPipeline` | `compiler/src/iree/compiler/InputConversion/Common/` |
+| Preprocessing | `Preprocessing::buildPreprocessingPassPipeline` | `compiler/src/iree/compiler/Preprocessing/` |
+| GlobalOptimization | `GlobalOptimization::buildGlobalOptimizationPassPipeline` | `compiler/src/iree/compiler/GlobalOptimization/` |
+| DispatchCreation | `DispatchCreation::buildDispatchCreationPassPipeline` | `compiler/src/iree/compiler/DispatchCreation/` |
+| Flow | `IREE::Flow::buildFlowTransformPassPipeline` | `compiler/src/iree/compiler/Dialect/Flow/Transforms/` |
+| Stream | `IREE::Stream::buildStreamTransformPassPipeline` | `compiler/src/iree/compiler/Dialect/Stream/Transforms/` |
+| HAL | `IREE::HAL::buildHALTransformPassPipeline` | `compiler/src/iree/compiler/Dialect/HAL/Transforms/` |
+| VM | `IREE::VM::buildVMTransformPassPipeline` | `compiler/src/iree/compiler/Dialect/VM/Transforms/` |
+
+**逐步追踪建议：**
+
+1. 从 `Pipelines.cpp` 的 `buildIREEVMTransformPassPipeline` 函数入手，了解整体顺序
+2. 进入感兴趣的 phase（如 Flow），找到对应的 `buildFlowTransformPassPipeline`
+3. 阅读该函数中逐个添加的 pass，理解每个 pass 的输入/输出 IR 形态
+
+### 方法四：结合使用——逐个 pass 学习工作流
+
+```bash
+# 1. 先用 --dump-pass-pipeline 列出所有 pass
+iree-opt --dump-pass-pipeline --pass-pipeline="builtin.module(iree-flow-transformation-pipeline)" 2>&1 > passes_list.txt
+
+# 2. 准备一个简单的测试 IR（如一个 matmul）
+# test.mlir
+
+# 3. 对每个 pass，单独查看其前后的 IR 变化
+iree-opt test.mlir --pass-pipeline="builtin.module(iree-flow-transformation-pipeline)" \
+  --mlir-print-ir-before-all --mlir-print-ir-after-all 2>&1 | \
+  grep -A 100 "IR Dump Before canonicalize"
+
+# 4. 用 --verify-each 确保每个 pass 后 IR 仍然合法
+iree-opt test.mlir --pass-pipeline="builtin.module(iree-flow-transformation-pipeline)" \
+  --verify-each --mlir-print-ir-after-all 2>&1
+```
+
+### 学习建议
+
+1. **从高层开始**：先理解 Input → Flow → Dispatch → Stream → HAL → VM 每个阶段的职责
+2. **选一个简单 pipeline**：如 `iree-vm-transformation-pipeline`，pass 较少，容易理解
+3. **准备小 IR**：用极简的 `.mlir` 文件（几行到几十行），避免输出爆炸
+4. **逐个 pass 看**：用 `--mlir-print-ir-before=xxx --mlir-print-ir-after=xxx` 聚焦单个 pass
+5. **读源码确认**：对看不懂的 pass，到对应 `Transforms/` 目录找 `Passes.cpp` 看具体实现
